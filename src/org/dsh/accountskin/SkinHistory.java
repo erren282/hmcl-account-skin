@@ -35,6 +35,12 @@ public final class SkinHistory {
 
     /// 历史记录里的一条。字段名就是 JSON 里的键名，改名会让老记录读不出来。
     public static class Entry {
+        /// 这条记录属于哪个账户（`AccountID` 的字符串形式）。
+        ///
+        /// <p>皮肤是账户自己的属性：同一个启动器里两个离线账户各用各的皮肤，
+        /// 混在一个列表里既没法辨认也没法应用（点一条就等于把别人的皮肤换到自己身上）。
+        /// 老记录没有这个字段，读出来是 null，会被归到 {@link #LEGACY_OWNER}。</p>
+        public String owner;
         /// `skin` 或 `cape`。
         public String kind;
         /// 皮肤库条目 id；本地文件为 0。
@@ -62,6 +68,10 @@ public final class SkinHistory {
             return tid > 0 ? "t" + tid : "p" + path;
         }
     }
+
+    /// 没有 `owner` 字段的老记录归到这个名下，这样升级后它们还看得见，
+    /// 而不是无声消失。用户可以在列表里删掉它们。
+    static final String LEGACY_OWNER = "";
 
     /// 落盘用的外层结构。带版本号，将来字段变动时还有得救。
     static class Store {
@@ -96,14 +106,16 @@ public final class SkinHistory {
 
     // ==== 读 ====
 
-    /// 某个分区（{@code skin} / {@code cape}）的记录，最近使用的在前。
+    /// 某个账户、某个分区（{@code skin} / {@code cape}）的记录，最近使用的在前。
     ///
     /// <p>材质文件已经被删掉的条目会被跳过：留着它只会得到一个点不动的死条目。</p>
-    public synchronized List<Entry> entries(String kind) {
+    ///
+    /// @param owner 账户标识，见 {@link #ownerOf}
+    public synchronized List<Entry> entries(String owner, String kind) {
         List<Entry> result = new ArrayList<>();
         boolean pruned = false;
         for (Entry entry : entries) {
-            if (!Objects.equals(entry.kind, kind))
+            if (!Objects.equals(entry.kind, kind) || !Objects.equals(normalizeOwner(entry.owner), normalizeOwner(owner)))
                 continue;
             if (entry.path == null || !Files.isRegularFile(Path.of(entry.path))) {
                 pruned = true;
@@ -119,27 +131,30 @@ public final class SkinHistory {
     }
 
     /// 记录数量，用于切换按钮上的角标。
-    public synchronized int count(String kind) {
-        return entries(kind).size();
+    public synchronized int count(String owner, String kind) {
+        return entries(owner, kind).size();
     }
 
     // ==== 写 ====
 
-    /// 记下一次使用。已存在的同一件材质会被提到最前并更新时间，不会重复。
+    /// 记下一次使用。同一账户下已存在的同一件材质会被提到最前并更新时间，不会重复。
     public synchronized void record(Entry entry) {
         if (entry == null || entry.kind == null || entry.path == null)
             return;
         if (!Files.isRegularFile(Path.of(entry.path)))
             return;
         entry.usedAt = System.currentTimeMillis();
+        entry.owner = normalizeOwner(entry.owner);
 
         String identity = entry.identity();
-        entries.removeIf(existing -> identity.equals(existing.identity()));
+        String owner = entry.owner;
+        entries.removeIf(existing -> Objects.equals(existing.owner, owner)
+                && identity.equals(existing.identity()));
         entries.add(0, entry);
 
-        // 按分区分别限长，避免一方把另一方挤掉。
-        trim("skin");
-        trim("cape");
+        // 按账户 + 分区分别限长，避免一个账户把另一个账户的记录挤掉。
+        trim(owner, "skin");
+        trim(owner, "cape");
         save();
     }
 
@@ -148,21 +163,28 @@ public final class SkinHistory {
         if (entry == null || entry.kind == null)
             return;
         String identity = entry.identity();
+        String owner = normalizeOwner(entry.owner);
         if (entries.removeIf(existing -> Objects.equals(existing.kind, entry.kind)
+                && Objects.equals(normalizeOwner(existing.owner), owner)
                 && identity.equals(existing.identity())))
             save();
     }
 
-    private void trim(String kind) {
+    private void trim(String owner, String kind) {
         int seen = 0;
         List<Entry> drop = new ArrayList<>();
         for (Entry entry : entries) {
-            if (!Objects.equals(entry.kind, kind))
+            if (!Objects.equals(entry.kind, kind) || !Objects.equals(normalizeOwner(entry.owner), owner))
                 continue;
             if (++seen > MAX_ENTRIES)
                 drop.add(entry);
         }
         entries.removeAll(drop);
+    }
+
+    /// 老记录没有 owner 字段，统一归到 {@link #LEGACY_OWNER}。
+    private static String normalizeOwner(String owner) {
+        return owner == null ? LEGACY_OWNER : owner;
     }
 
     // ==== 落盘 ====

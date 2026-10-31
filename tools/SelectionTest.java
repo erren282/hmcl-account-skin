@@ -41,8 +41,11 @@ public final class SelectionTest {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         try {
             SkinHistory.initialize(dir.resolve("history.json"));
-            seed(dir);
-            run(dir);
+            // 同一个账户对象既用来种数据、又用来开对话框：历史是按账户分的，
+            // 两边算出来的 owner 必须一致，否则列表是空的。
+            org.jackhuang.hmcl.auth.offline.OfflineAccount account = offlineAccount();
+            seed(dir, account);
+            run(dir, account);
         } catch (Throwable t) {
             failure.set(t);
         } finally {
@@ -62,12 +65,14 @@ public final class SelectionTest {
         System.exit(failed > 0 ? 1 : 0);
     }
 
-    /// Puts two skins into the history so the list has rows to select.
-    private static void seed(Path dir) throws Exception {
+    /// Puts two skins into the account's history so the list has rows to select.
+    private static void seed(Path dir, org.jackhuang.hmcl.auth.Account account) throws Exception {
+        String owner = SkinCapeDialog.ownerOf(account);
         for (int i = 1; i <= 2; i++) {
             Path file = dir.resolve("skin" + i + ".png");
             Files.write(file, new byte[]{(byte) 0x89, 'P', 'N', 'G'});
             SkinHistory.Entry entry = new SkinHistory.Entry();
+            entry.owner = owner;
             entry.kind = "skin";
             entry.tid = i;
             entry.name = "skin " + i;
@@ -77,13 +82,12 @@ public final class SelectionTest {
         }
     }
 
-    private static void run(Path dir) throws Exception {
+    private static void run(Path dir, org.jackhuang.hmcl.auth.Account account) throws Exception {
         AtomicReference<Stage> stageRef = new AtomicReference<>();
         AtomicReference<SkinCapeDialog> dialogRef = new AtomicReference<>();
 
         onFx(() -> {
-            SkinCapeDialog dialog = new SkinCapeDialog(
-                    offlineAccount(), SkinCapeDialog.Mode.SKIN, dir);
+            SkinCapeDialog dialog = new SkinCapeDialog(account, SkinCapeDialog.Mode.SKIN, dir);
             Stage stage = new Stage();
             stage.setScene(new Scene(new StackPane(dialog), 1000, 800));
             stage.show();
@@ -131,6 +135,29 @@ public final class SelectionTest {
 
         onFx(() -> stageRef.get().close());
         pump(4);
+
+        System.out.println();
+        System.out.println("=== 换一个账户，列表跟着换 ===");
+        // Two different offline accounts must not see each other's history: this is the
+        // whole point of the per-account change, so it is checked through the real dialog.
+        AtomicReference<Stage> secondStage = new AtomicReference<>();
+        AtomicReference<SkinCapeDialog> secondDialog = new AtomicReference<>();
+        onFx(() -> {
+            SkinCapeDialog dialog = new SkinCapeDialog(
+                    offlineAccount("someone-else"), SkinCapeDialog.Mode.SKIN, dir);
+            Stage stage = new Stage();
+            stage.setScene(new Scene(new StackPane(dialog), 1000, 800));
+            stage.show();
+            secondStage.set(stage);
+            secondDialog.set(dialog);
+        });
+        pump(10);
+
+        ListView<?> otherList = findListView(secondDialog.get());
+        check("the other account's list is empty", otherList != null && otherList.getItems().isEmpty());
+
+        onFx(() -> secondStage.get().close());
+        pump(4);
     }
 
     /// Reads the inline style of the cell at {@code index}, which is what paints the border.
@@ -174,11 +201,15 @@ public final class SelectionTest {
     }
 
     private static org.jackhuang.hmcl.auth.offline.OfflineAccount offlineAccount() {
+        return offlineAccount("qwen");
+    }
+
+    private static org.jackhuang.hmcl.auth.offline.OfflineAccount offlineAccount(String name) {
         org.jackhuang.hmcl.auth.offline.OfflineAccountFactory factory =
                 new org.jackhuang.hmcl.auth.offline.OfflineAccountFactory(
                         new org.jackhuang.hmcl.auth.authlibinjector.SimpleAuthlibInjectorArtifactProvider(
                                 java.nio.file.Paths.get("authlib-injector.jar")));
-        return factory.create("qwen", java.util.UUID.nameUUIDFromBytes("qwen".getBytes()));
+        return factory.create(name, java.util.UUID.nameUUIDFromBytes(name.getBytes()));
     }
 
     private static void check(String what, boolean ok) {

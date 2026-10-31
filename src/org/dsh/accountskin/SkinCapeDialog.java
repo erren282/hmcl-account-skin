@@ -76,6 +76,12 @@ public final class SkinCapeDialog extends StackPane {
     private final Mode mode;
     private final Path dataDir;
 
+    /// 这个账户在历史记录里的标识。
+    ///
+    /// <p>用 `AccountID` 而不是用户名：用户名可以改，改了历史就找不回来了；
+    /// 也不用 profileID，因为离线账户和同名在线账户的 profileID 有可能撞上。</p>
+    private final String owner;
+
     private final ToggleGroup formGroup = new ToggleGroup();
     private final ElytraSkinCanvas canvas;
     private final ListView<Row> historyView = new ListView<>();
@@ -107,6 +113,7 @@ public final class SkinCapeDialog extends StackPane {
         this.account = account;
         this.mode = mode;
         this.dataDir = dataDir;
+        this.owner = ownerOf(account);
 
         JFXDialogLayout layout = new JFXDialogLayout();
         getChildren().setAll(layout);
@@ -236,6 +243,28 @@ public final class SkinCapeDialog extends StackPane {
 
         reloadHistory();
         refreshPreview();
+    }
+
+    /// 账户在历史里的标识。
+    ///
+    /// <p>`AccountID` 是启动器给每条账户记录分配的稳定 id，改用户名、重新登录都不变。
+    /// 拿不到时退回 profileID，再不行用用户名——总有值比丢失记录强。</p>
+    static String ownerOf(Account account) {
+        try {
+            if (account.getAccountID() != null)
+                return account.getAccountID().toString();
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (account.getProfileID() != null)
+                return "uuid:" + account.getProfileID();
+        } catch (Throwable ignored) {
+        }
+        try {
+            return "name:" + account.getProfileName();
+        } catch (Throwable ignored) {
+            return "";
+        }
     }
 
     // ==== 形态 ====
@@ -409,6 +438,7 @@ public final class SkinCapeDialog extends StackPane {
     /// 把这次应用记进“曾使用过”。
     private void record(Path file, boolean slim, boolean elytra) {
         SkinHistory.Entry entry = new SkinHistory.Entry();
+        entry.owner = owner;
         entry.kind = mode == Mode.SKIN ? "skin" : "cape";
         entry.path = file.toString();
         entry.slim = slim;
@@ -445,7 +475,7 @@ public final class SkinCapeDialog extends StackPane {
 
     private void reloadHistory() {
         String kind = mode == Mode.SKIN ? "skin" : "cape";
-        List<SkinHistory.Entry> entries = SkinHistory.get().entries(kind);
+        List<SkinHistory.Entry> entries = SkinHistory.get().entries(owner, kind);
         historyView.getItems().clear();
         for (SkinHistory.Entry entry : entries) {
             Image thumb = null;
