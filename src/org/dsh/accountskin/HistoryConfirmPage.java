@@ -45,9 +45,10 @@ final class HistoryConfirmPage extends VBox {
     /**
      * @param onApplied 装备成功后的回调，用来回到来源页
      * @param onBack    返回上一页
+     * @param onConfirm 供宿主把「确认装备」挂到对话框底部按钮栏上
      */
     HistoryConfirmPage(Account account, SkinHistory.Entry entry,
-                       Runnable onApplied, Runnable onBack) {
+                       Runnable onApplied, Runnable onBack, Runnable onConfirm) {
         this.account = account;
         this.entry = entry;
         this.isCape = "cape".equals(entry.kind);
@@ -97,11 +98,10 @@ final class HistoryConfirmPage extends VBox {
         source.setMaxWidth(230);
         source.setStyle("-fx-font-size: 11px; -fx-text-fill: -monet-on-surface-variant;");
 
-        JFXButton confirm = new JFXButton("确认装备");
-        confirm.getStyleClass().add("dialog-accept");
-        confirm.setOnAction(e -> apply());
-
-        VBox right = new VBox(10, formTitle, formButtons, source, confirm);
+        // 「确认装备」不在这里，而是挂到对话框底部的按钮栏、和「取消」并排：
+        // 它是这一页的主操作，混在右侧的说明文字中间既不显眼，也和其它页的
+        // 按钮位置对不上——用户每翻一页都要重新找按钮在哪。
+        VBox right = new VBox(10, formTitle, formButtons, source);
         right.setAlignment(Pos.TOP_CENTER);
         right.setPrefWidth(240);
         right.setMinWidth(240);
@@ -120,6 +120,16 @@ final class HistoryConfirmPage extends VBox {
     }
 
     private final Runnable onApplied;
+
+    /// 宿主调用：执行装备。由底部按钮栏的「确认装备」触发。
+    void confirm() {
+        apply();
+    }
+
+    /// 装备按钮的文案，让宿主建按钮时用。
+    static String confirmLabel() {
+        return "确认装备";
+    }
 
     private void refreshPreview() {
         boolean second = FormToggles.isSecond(formGroup);

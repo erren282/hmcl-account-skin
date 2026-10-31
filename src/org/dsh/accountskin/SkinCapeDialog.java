@@ -227,24 +227,58 @@ public final class SkinCapeDialog extends StackPane {
                     + "。\n先用一次，之后就能在这里找回来。");
             return;
         }
-        pages.push(new HistoryGridPage(owner, kind,
-                entry -> pages.push(new HistoryConfirmPage(account, entry,
-                        () -> pages.pop(),   // 装备成功：回到来源页
-                        () -> pages.pop())), // 点返回：回到网格
-                () -> pages.pop()));
+        pages.push(new HistoryGridPage(owner, kind, this::openConfirm, () -> {
+            pages.pop();
+            layout.setActions(buildSourceActions());
+        }));
         layout.setActions(buildInnerActions());
     }
 
-    /// 内页只有一个“返回”：应用/取消属于来源页，内页里放会让人以为要在这里确认两次。
-    private Node buildInnerActions() {
+    /// 进入确认页。「确认装备」和「取消」并排放在底部，和其它页的按钮位置一致。
+    private void openConfirm(SkinHistory.Entry entry) {
+        HistoryConfirmPage[] page = new HistoryConfirmPage[1];
+        page[0] = new HistoryConfirmPage(account, entry,
+                () -> {
+                    // 装备成功：回到来源页。
+                    pages.pop();
+                    pages.pop();
+                    layout.setActions(buildSourceActions());
+                },
+                () -> {
+                    // 返回网格。
+                    pages.pop();
+                    layout.setActions(buildGridActions());
+                },
+                null);
+        pages.push(page[0]);
+        layout.setActions(buildConfirmActions(page[0]));
+    }
+
+    /// 确认页底部：确认装备 + 取消。
+    private Node buildConfirmActions(HistoryConfirmPage page) {
+        JFXButton confirmButton = new JFXButton(HistoryConfirmPage.confirmLabel());
+        confirmButton.getStyleClass().add("dialog-accept");
+        confirmButton.setOnAction(e -> page.confirm());
+        JFXButton cancelButton = new JFXButton(i18n("button.cancel"));
+        cancelButton.getStyleClass().add("dialog-cancel");
+        cancelButton.setOnAction(e -> fireEvent(new DialogCloseEvent()));
+        return new HBox(10, confirmButton, cancelButton);
+    }
+
+    /// 网格页底部：只有一个“返回”。
+    private Node buildGridActions() {
         JFXButton backButton = new JFXButton("返回");
         backButton.getStyleClass().add("dialog-cancel");
         backButton.setOnAction(e -> {
             pages.pop();
-            if (!pages.canGoBack())
-                layout.setActions(buildSourceActions());
+            layout.setActions(buildSourceActions());
         });
         return new HBox(10, backButton);
+    }
+
+    /// 内页的兜底返回。
+    private Node buildInnerActions() {
+        return buildGridActions();
     }
 
     /// 账户在历史里的标识。
@@ -443,5 +477,15 @@ public final class SkinCapeDialog extends StackPane {
     /// 供测试读取页面容器。
     PageHost pageHost() {
         return pages;
+    }
+
+    /// 供测试直接进入网格页。
+    void openHistoryForTest(String kind) {
+        openHistory(kind);
+    }
+
+    /// 供测试直接进入确认页。
+    void openConfirmForTest(SkinHistory.Entry entry) {
+        openConfirm(entry);
     }
 }

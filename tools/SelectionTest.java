@@ -5,6 +5,7 @@ import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Label;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
 import org.jackhuang.hmcl.auth.Account;
@@ -128,6 +129,10 @@ public final class SelectionTest {
         checkTransitions();
 
         System.out.println();
+        System.out.println("=== 确认页的按钮在底部栏 ===");
+        checkConfirmActions(account, dir);
+
+        System.out.println();
         System.out.println("=== 另一个账户看不到这些 ===");
         check("their history is empty",
                 SkinHistory.get().entries(SkinCapeDialog.ownerOf(offlineAccount("someone-else")), "skin")
@@ -168,6 +173,8 @@ public final class SelectionTest {
         double offset = second.get().getTranslateX();
         check("pushing puts two pages on screen at once", during == 2);
         check("the incoming page starts offset to the right", offset > 0);
+        check("the offset matches the launcher's own page transition (50 px)",
+                Math.abs(offset - 50) < 0.5);
 
         // Let it finish.
         Thread.sleep(400);
@@ -197,6 +204,9 @@ public final class SelectionTest {
         check("the returning page starts offset to the left",
                 hostRef.get().getChildren().size() == 2
                         && hostRef.get().getChildren().get(1).getTranslateX() < 0);
+        check("and by the same distance as the launcher's transition",
+                hostRef.get().getChildren().size() == 2
+                        && Math.abs(hostRef.get().getChildren().get(1).getTranslateX() + 50) < 0.5);
 
         Thread.sleep(400);
         pump(4);
@@ -204,6 +214,67 @@ public final class SelectionTest {
                 hostRef.get().getChildren().size() == 1);
         check("and the stack went back one level",
                 hostRef.get().canGoBack());
+
+        onFx(() -> stageRef.get().close());
+        pump(4);
+    }
+
+    /// The confirm page must put 确认装备 next to 取消 in the dialog's action bar,
+    /// not inside the page body: the body is the right-hand column of explanation text,
+    /// where a primary button is easy to miss and sits in a different place than on
+    /// every other page.
+    private static void checkConfirmActions(Account account, Path dir) throws Exception {
+        String owner = SkinCapeDialog.ownerOf(account);
+        SkinHistory.Entry entry = SkinHistory.get().entries(owner, "skin").get(0);
+        AtomicReference<SkinCapeDialog> dialogRef = new AtomicReference<>();
+        AtomicReference<Stage> stageRef = new AtomicReference<>();
+
+        onFx(() -> {
+            SkinCapeDialog dialog = new SkinCapeDialog(account, SkinCapeDialog.Mode.SKIN, dir);
+            Stage stage = new Stage();
+            stage.setScene(new Scene(new StackPane(dialog), 1000, 800));
+            stage.show();
+            stageRef.set(stage);
+            dialogRef.set(dialog);
+        });
+        pump(10);
+
+        // Walk into the confirm page the way the user does.
+        onFx(() -> dialogRef.get().openHistoryForTest("skin"));
+        pump(6);
+        onFx(() -> dialogRef.get().openConfirmForTest(entry));
+        pump(6);
+
+        List<Node> nodes = allNodes(dialogRef.get());
+        check("the confirm page is showing",
+                nodes.stream().anyMatch(n -> n instanceof Label label
+                        && label.getText() != null && label.getText().startsWith("装备皮肤")));
+
+        // Find the action bar buttons by their style classes.
+        Node accept = nodes.stream()
+                .filter(n -> n instanceof com.jfoenix.controls.JFXButton)
+                .filter(n -> n.getStyleClass().contains("dialog-accept"))
+                .findFirst().orElse(null);
+        // The page bodies also carry a 返回 button with the same style class, so the
+        // cancel button is located as a sibling of the confirm button instead.
+        Node cancel = accept == null || !(accept.getParent() instanceof HBox bar)
+                ? null
+                : bar.getChildren().stream()
+                        .filter(n -> n instanceof com.jfoenix.controls.JFXButton)
+                        .filter(n -> n.getStyleClass().contains("dialog-cancel"))
+                        .findFirst().orElse(null);
+
+        check("there is a confirm button", accept != null);
+        check("and a cancel button", cancel != null);
+        check("they are siblings in the same action bar",
+                accept != null && cancel != null && accept.getParent() == cancel.getParent());
+        check("the confirm button says 确认装备",
+                accept instanceof com.jfoenix.controls.JFXButton button
+                        && "确认装备".equals(button.getText()));
+        check("confirm comes before cancel, like a standard dialog",
+                accept != null && cancel != null
+                        && ((HBox) accept.getParent()).getChildren().indexOf(accept)
+                        < ((HBox) accept.getParent()).getChildren().indexOf(cancel));
 
         onFx(() -> stageRef.get().close());
         pump(4);

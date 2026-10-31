@@ -43,6 +43,12 @@ final class PageHost extends StackPane {
     private static final Duration DURATION = Motion.SHORT4;
     private static final Interpolator EASE = Motion.EASE;
 
+    /// 位移距离，取自启动器原生页面切换（`DecoratorSkin.NavBarAnimations`）的 50 px。
+    ///
+    /// <p>跟着原生参数走，插件里的切换和启动器自己的页面切换手感才一致。
+    /// 之前用整页宽度做位移，视觉上像被甩出去，和原生动画明显不是一回事。</p>
+    private static final double OFFSET = 50;
+
     /// 页面栈。返回时用它决定回到哪一页。
     private final Deque<Node> stack = new ArrayDeque<>();
 
@@ -128,13 +134,15 @@ final class PageHost extends StackPane {
             return;
         }
 
-        double distance = slideDistance();
-        double from = direction == Direction.FORWARD ? distance
-                : direction == Direction.BACKWARD ? -distance : 0;
+        // 位移量与启动器原生页面切换一致：不是整页滑过，而是新页从 ±OFFSET 处
+        // 淡入、旧页向反方向移动同样的距离。整页滑过在这里会显得过重——
+        // 对话框比主窗口小得多，一整屏的位移看起来像被甩出去。
+        double offset = direction == Direction.FORWARD ? OFFSET
+                : direction == Direction.BACKWARD ? -OFFSET : 0;
 
         reset(previous, true);
         reset(next, true);
-        next.setTranslateX(from);
+        next.setTranslateX(offset);
         next.setOpacity(direction == Direction.FADE ? 0 : 1);
 
         getChildren().setAll(previous, next);
@@ -144,11 +152,11 @@ final class PageHost extends StackPane {
                 new KeyFrame(Duration.ZERO,
                         new KeyValue(previous.translateXProperty(), 0, EASE),
                         new KeyValue(previous.opacityProperty(), 1, EASE),
-                        new KeyValue(next.translateXProperty(), from, EASE),
+                        new KeyValue(next.translateXProperty(), offset, EASE),
                         new KeyValue(next.opacityProperty(), direction == Direction.FADE ? 0 : 1, EASE)),
                 new KeyFrame(DURATION,
-                        new KeyValue(previous.translateXProperty(), -from, EASE),
-                        new KeyValue(previous.opacityProperty(), direction == Direction.FADE ? 0 : 1, EASE),
+                        new KeyValue(previous.translateXProperty(), -offset, EASE),
+                        new KeyValue(previous.opacityProperty(), 0, EASE),
                         new KeyValue(next.translateXProperty(), 0, EASE),
                         new KeyValue(next.opacityProperty(), 1, EASE)));
 
@@ -161,16 +169,4 @@ final class PageHost extends StackPane {
         timeline.play();
     }
 
-    /// 滑动的距离。
-    ///
-    /// <p>优先用容器的实际宽度；构造完还没上屏时宽度是 0，这时按内容的
-    /// 首选宽度估算——直接用 0 的话两页会原地叠着换，看起来像没动画。</p>
-    private double slideDistance() {
-        double width = getWidth();
-        if (width <= 0)
-            width = getPrefWidth();
-        if (width <= 0)
-            width = 400;
-        return width;
-    }
 }
