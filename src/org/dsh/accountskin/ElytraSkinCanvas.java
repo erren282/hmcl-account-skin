@@ -128,43 +128,102 @@ public class ElytraSkinCanvas extends SkinCanvas {
     /// the normal cape quad on the back. The camera faces the back whenever a cape
     /// is involved (elytra: 背面偏侧 315°；普通披风: 正背面 0°), and faces the front
     /// only for pure skin previews (no cape).
+    ///
+    /// <h2>为什么不在每次刷新时重置相机</h2>
+    /// <p>相机角度原来每次调用都被写死：皮肤→正面 180°，披风→背面 0°/315°。这在“点一个来源
+    /// 按钮换一套材质”时是对的，但“来回切形态按钮”时就成了抽搐：用户刚把角色转到侧面看清
+    /// 对比，每点一次形态就被拽回正面/背面。所以现在只在<b>材质换了</b>时才重新摆相机，
+    /// 单纯改形态保持用户当前的视角。</p>
     public void setModel(Image skin, boolean isSlim, Image cape, boolean elytra) {
+        boolean textureChanged = skin != lastSkin || cape != lastCape;
+        boolean capePresenceChanged = (cape == null) != (lastCape == null);
+
         elytraMode = elytra;
         capeTexture = cape;
+        lastSkin = skin;
+        lastCape = cape;
+
         super.updateSkin(skin, isSlim, elytra ? null : cape);
-        if (elytra) {
-            yRotate.setAngle(315); // 背面偏侧，展示鞘翅
-        } else if (cape != null) {
-            yRotate.setAngle(0);   // 普通披风：背面
-        } else {
-            yRotate.setAngle(180); // 纯皮肤预览：正面
+
+        // 只在换了材质、或“有没有披风”这件事变了时才重新摆相机。
+        if (textureChanged || capePresenceChanged || !cameraPlaced) {
+            if (elytra) {
+                yRotate.setAngle(315); // 背面偏侧，展示鞘翅
+            } else if (cape != null) {
+                yRotate.setAngle(0);   // 普通披风：背面
+            } else {
+                yRotate.setAngle(180); // 纯皮肤预览：正面
+            }
+            xRotate.setAngle(0);
+            cameraPlaced = true;
         }
-        xRotate.setAngle(0);
         refreshWings();
     }
+
+    private Image lastSkin, lastCape;
+
+    /// 相机是否已经摆过一次。第一次必须摆，否则会停在父类默认的 180°。
+    private boolean cameraPlaced;
 
     private void refreshWings() {
         if (elytraGroup == null)
             return; // super 构造期间会虚调用 updateSkin，此时翅膀尚未初始化
 
         elytraGroup.setVisible(elytraMode && capeTexture != null);
-        if (capeTexture != null) {
+        if (capeTexture != null && capeTexture != enlargedCapeSource) {
+            // 放大是一张 256x256 的逐像素拷贝，每帧做一次是纯浪费；
+            // 披风贴图换来换去就那几张，记住上一次的结果就够了。
             Image texture = capeTexture.getWidth() < 256
                     ? SkinHelperEnlarge.enlarge(capeTexture)
                     : capeTexture;
+            enlargedCapeSource = capeTexture;
             wingMaterial.setDiffuseMap(texture);
-            // 父类 updateSkin -> bindMaterial 会把所有几何体重新指到皮肤材质，
-            // 这里必须把翅膀的材质重新指回披风材质
-            leftWing.setMaterial(wingMaterial);
-            rightWing.setMaterial(wingMaterial);
         }
+        // 父类 updateSkin -> bindMaterial 会把所有几何体重新指到皮肤材质，
+        // 这里必须把翅膀的材质重新指回披风材质。
+        leftWing.setMaterial(wingMaterial);
+        rightWing.setMaterial(wingMaterial);
     }
+
+    /// 上一次放大过的披风贴图，避免每帧重复放大。
+    private Image enlargedCapeSource;
 
     @Override
     public void updateSkin(Image skin, boolean isSlim, Image cape) {
+        // 材质没变、只有手臂模型变时，只重算几何，不重建整棵模型。
+        //
+        // 父类的 updateSkin -> bindMaterial 会为外层装饰（帽子、外套、袖子…）逐个像素
+        // 建 Box 节点：帽子一层就是 8x8 个，加外套和四肢一共几百上千个节点，每次重建
+        // 都要几十毫秒，期间画面停住再跳到新状态——来回点形态按钮看到的就是这个抽搐。
+        //
+        // 而“手臂变宽变窄”只需要更新手臂那块几何，装饰件完全不用动。所以分开处理：
+        // 材质真变了才走父类的完整重绑，只改模型就自己调 updateSkinModel。
+        boolean textureChanged = skin != appliedSkin || cape != appliedCape;
+        boolean slimChanged = isSlim != appliedSlim;
+
+        if (appliedOnce && !textureChanged) {
+            if (slimChanged) {
+                updateSkinModel(isSlim, cape != null);
+                appliedSlim = isSlim;
+                refreshWings();
+            }
+            return;
+        }
+
+        appliedSkin = skin;
+        appliedCape = cape;
+        appliedSlim = isSlim;
+        appliedOnce = true;
+
         super.updateSkin(skin, isSlim, cape);
         refreshWings();
     }
+
+    private Image appliedSkin, appliedCape;
+    private boolean appliedSlim;
+
+    /// 是否已经应用过一次。第一次必须让父类跑一遍，否则模型没有材质。
+    private boolean appliedOnce;
 
     /// 独立的放大工具（避免直接依赖 SkinHelper 的包私有细节）。
     private static final class SkinHelperEnlarge {

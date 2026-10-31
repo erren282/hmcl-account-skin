@@ -317,8 +317,17 @@ public final class SkinCapeDialog extends StackPane {
     }
 
     private boolean isCurrentSlim() {
-        return AccountTextures.isSlim(account);
+        // 每点一次形态按钮都会走到这里，而 `AccountTextures.isSlim` 会新建一次
+        // `skinBinding`。取一次就够了。
+        if (!slimResolved) {
+            slimResolved = true;
+            slimValue = AccountTextures.isSlim(account);
+        }
+        return slimValue;
     }
+
+    private boolean slimResolved;
+    private boolean slimValue;
 
     private void loadSkinPreview(Path file) {
         try (var in = Files.newInputStream(file)) {

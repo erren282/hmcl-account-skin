@@ -134,12 +134,35 @@ final class HistoryConfirmPage extends VBox {
     private void refreshPreview() {
         boolean second = FormToggles.isSecond(formGroup);
         if (isCape) {
-            canvas.setModel(AccountTextures.skin(account), AccountTextures.isSlim(account), texture, second);
+            canvas.setModel(accountSkin(), accountSlim(), texture, second);
         } else {
             // 皮肤预览也把身上的披风画出来：不然换了皮肤看不出和披风搭不搭。
             canvas.setModel(texture, second, accountCape(), false);
         }
     }
+
+    /// 账户当前的皮肤与手臂模型，各取一次就缓存。
+    ///
+    /// <p>`TexturesLoader.skinBinding` 每次调用都会新建一个绑定对象并注册监听；点形态按钮
+    /// 会连续触发几次刷新，反复新建绑定既浪费又可能让预览短暂回落到默认皮肤——那一下就
+    /// 是肉眼看到的闪。取到之后记下来就够了。</p>
+    private Image accountSkin() {
+        if (!skinResolved) {
+            skinResolved = true;
+            skinImage = AccountTextures.skin(account);
+            skinSlim = AccountTextures.isSlim(account);
+        }
+        return skinImage;
+    }
+
+    private boolean accountSlim() {
+        accountSkin();
+        return skinSlim;
+    }
+
+    private boolean skinResolved;
+    private Image skinImage;
+    private boolean skinSlim;
 
     /// 账户当前穿着的披风。异步取，取到后重画一次。
     private Image accountCape() {
