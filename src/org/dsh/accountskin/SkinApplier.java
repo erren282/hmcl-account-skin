@@ -17,6 +17,7 @@ import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.io.HttpMultipartRequest;
 import org.jackhuang.hmcl.util.io.NetworkUtils;
 import org.jackhuang.hmcl.util.skin.NormalizedSkin;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -78,22 +79,35 @@ public final class SkinApplier {
 
     /// Applies a skin texture file (downloaded from LittleSkin or chosen locally) to the account.
     public static void applySkin(Account account, Path file, Runnable onSuccess, Consumer<String> onError) {
+        applySkin(account, file, null, onSuccess, onError);
+    }
+
+    /// Applies a skin with an explicitly chosen arm model.
+    ///
+    /// <p>`slim` is `null` when the caller has no opinion, in which case the model is
+    /// detected from the texture's transparent arm column the way the launcher does it.
+    /// The history list passes a value instead: the user may have worn the same skin
+    /// with the other model, and going back to it should restore what they had, not
+    /// what the file happens to look like.</p>
+    public static void applySkin(Account account, Path file, @Nullable Boolean slim,
+                                 Runnable onSuccess, Consumer<String> onError) {
         runAsync(() -> {
+            boolean isSlim = slim != null ? slim : isSlim(file);
             if (account instanceof MicrosoftAccount microsoftAccount) {
                 validateSkinForUpload(file);
                 login(account);
-                microsoftAccount.uploadSkin(isSlim(file), file);
+                microsoftAccount.uploadSkin(isSlim, file);
                 refreshTextures(microsoftAccount);
             } else if (account instanceof AuthlibInjectorAccount injectorAccount) {
                 login(account);
-                injectorAccount.uploadSkin(isSlim(file), file);
+                injectorAccount.uploadSkin(isSlim, file);
                 refreshTextures(injectorAccount);
             } else if (account instanceof OfflineAccount offlineAccount) {
                 Skin current = offlineAccount.getSkin();
                 String capePath = current != null && current.type() == Skin.Type.LOCAL_FILE
                         ? current.localCapePath() : null;
                 offlineAccount.setSkin(new Skin(Skin.Type.LOCAL_FILE, null,
-                        isSlim(file) ? TextureModel.SLIM : TextureModel.WIDE,
+                        isSlim ? TextureModel.SLIM : TextureModel.WIDE,
                         file.toString(), capePath));
             } else {
                 throw new UnsupportedOperationException("该账户类型不支持切换皮肤");
@@ -112,7 +126,11 @@ public final class SkinApplier {
 
     /// Applies a cape texture file. Not supported for Microsoft accounts (Mojang does not
     /// accept cape uploads); those use {@link #fetchMojangProfile} / {@link #activateMojangCape}.
-    public static void applyCape(Account account, Path file, Runnable onSuccess, Consumer<String> onError) {
+    ///
+    /// <p>`slim` keeps the arm model of the skin that stays in place, so switching a cape
+    /// does not silently reset the body model.</p>
+    public static void applyCape(Account account, Path file, @Nullable Boolean slim,
+                                 Runnable onSuccess, Consumer<String> onError) {
         runAsync(() -> {
             if (account instanceof MicrosoftAccount) {
                 throw new UnsupportedOperationException("微软账户暂不支持上传自定义披风，请使用“选择已拥有的官方披风”");
@@ -124,7 +142,9 @@ public final class SkinApplier {
                 Skin current = offlineAccount.getSkin();
                 String skinPath = current != null && current.type() == Skin.Type.LOCAL_FILE
                         ? current.localSkinPath() : null;
-                TextureModel model = current != null ? current.textureModel() : TextureModel.WIDE;
+                TextureModel model = slim != null
+                        ? (slim ? TextureModel.SLIM : TextureModel.WIDE)
+                        : (current != null ? current.textureModel() : TextureModel.WIDE);
                 offlineAccount.setSkin(new Skin(Skin.Type.LOCAL_FILE, null, model, skinPath, file.toString()));
             } else {
                 throw new UnsupportedOperationException("该账户类型不支持切换披风");

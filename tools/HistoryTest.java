@@ -88,13 +88,48 @@ public final class HistoryTest {
             System.out.println();
             System.out.println("=== 相对时间 ===");
             long now = System.currentTimeMillis();
-            check("a fresh entry reads 刚刚", "刚刚".equals(LittleSkinLibraryPane.describeAge(now)));
+            check("a fresh entry reads 刚刚", "刚刚".equals(SkinCapeDialog.describeAge(now)));
             check("five minutes ago", "5 分钟前".equals(
-                    LittleSkinLibraryPane.describeAge(now - 5 * 60_000L)));
+                    SkinCapeDialog.describeAge(now - 5 * 60_000L)));
             check("three hours ago", "3 小时前".equals(
-                    LittleSkinLibraryPane.describeAge(now - 3 * 3_600_000L)));
+                    SkinCapeDialog.describeAge(now - 3 * 3_600_000L)));
             check("two days ago", "2 天前".equals(
-                    LittleSkinLibraryPane.describeAge(now - 2 * 86_400_000L)));
+                    SkinCapeDialog.describeAge(now - 2 * 86_400_000L)));
+
+            System.out.println();
+            System.out.println("=== 模型与形态随记录保存 ===");
+            Path slimSkin = write(dir.resolve("slim.png"));
+            SkinHistory.Entry slimEntry = entry("skin", 31, "Slim skin", slimSkin);
+            slimEntry.slim = true;
+            history.record(slimEntry);
+            check("the slim flag is kept", history.entries("skin").get(0).slim);
+
+            Path elytraCape = write(dir.resolve("ely.png"));
+            SkinHistory.Entry elytraEntry = entry("cape", 32, "Elytra cape", elytraCape);
+            elytraEntry.elytra = true;
+            history.record(elytraEntry);
+            check("the elytra flag is kept", history.entries("cape").get(0).elytra);
+
+            // Re-recording the same texture with a different model must update the flag,
+            // not add a second row: the user changed their mind, they did not gain a skin.
+            int beforeSwitch = history.count("skin");
+            SkinHistory.Entry switched = entry("skin", 31, "Slim skin", slimSkin);
+            switched.slim = false;
+            history.record(switched);
+            check("switching the model does not add a row",
+                    history.count("skin") == beforeSwitch);
+            check("and it updates the stored model",
+                    !history.entries("skin").get(0).slim);
+
+            System.out.println();
+            System.out.println("=== 删除 ===");
+            int beforeDelete = history.count("skin");
+            history.forget(history.entries("skin").get(0));
+            check("deleting removes exactly one row",
+                    history.count("skin") == beforeDelete - 1);
+            check("the deleted name is gone",
+                    history.entries("skin").stream().noneMatch(e -> "Slim skin".equals(e.name)));
+            check("the cape list was not touched", history.count("cape") > 0);
         } finally {
             deleteRecursively(dir);
         }

@@ -26,6 +26,10 @@ import java.util.Objects;
  * <h2>分区</h2>
  * <p>皮肤与披风分成两个列表各自记录，互不干扰：披风的贴图区域和皮肤完全不同，
  * 混在一起既没法预览也没法应用。</p>
+ *
+ * <h2>记下模型</h2>
+ * <p>每条同时记下当时用的手臂模型（宽臂/纤细）与披风形态（普通/鞘翅），
+ * 再次使用时按原样恢复，而不是回到默认值——用户当初怎么穿的，就该怎么回来。</p>
  */
 public final class SkinHistory {
 
@@ -42,6 +46,10 @@ public final class SkinHistory {
         public boolean hd;
         /// 本地材质文件。历史条目靠它预览与应用，不依赖网络。
         public String path;
+        /// 上次使用时的手臂模型是否为纤细（艾利克斯）。
+        public boolean slim;
+        /// 上次使用时的披风形态是否为鞘翅（仅披风条目有意义）。
+        public boolean elytra;
         /// 最后一次使用的时刻，毫秒时间戳。
         public long usedAt;
 
@@ -136,9 +144,12 @@ public final class SkinHistory {
     }
 
     /// 从历史里删掉一条（同一件材质）。
-    public synchronized void forget(String kind, int tid, String path) {
-        String identity = tid > 0 ? "t" + tid : "p" + path;
-        if (entries.removeIf(entry -> Objects.equals(entry.kind, kind) && identity.equals(entry.identity())))
+    public synchronized void forget(Entry entry) {
+        if (entry == null || entry.kind == null)
+            return;
+        String identity = entry.identity();
+        if (entries.removeIf(existing -> Objects.equals(existing.kind, entry.kind)
+                && identity.equals(existing.identity())))
             save();
     }
 
