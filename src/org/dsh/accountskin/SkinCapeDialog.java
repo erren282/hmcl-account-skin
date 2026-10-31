@@ -5,7 +5,9 @@ import com.jfoenix.controls.JFXDialogLayout;
 import javafx.beans.value.ObservableValue;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.Label;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.image.Image;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
@@ -26,17 +28,21 @@ import java.nio.file.Path;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 
 /**
- * 皮肤/披风切换主对话框：左侧 3D 预览，右侧来源按钮。
+ * 皮肤/披风切换对话框：一个 {@link PageHost} 装三层页面。
  *
- * <h2>三个界面各管一件事</h2>
+ * <h2>三层各管一件事</h2>
  * <ul>
- *   <li>本页：从哪来——皮肤库 / 本地文件 / 曾使用过；</li>
- *   <li>{@link HistoryGridPane}：挑哪一件（网格，可删除）；</li>
- *   <li>{@link HistoryConfirmPane}：怎么穿（形态 + 装备）。</li>
+ *   <li>来源页：从哪来——皮肤库 / 本地文件 / 曾使用过；</li>
+ *   <li>{@link HistoryGridPage}：挑哪一件（网格，可删除）；</li>
+ *   <li>{@link HistoryConfirmPage}：怎么穿（形态 + 装备）。</li>
  * </ul>
  *
- * <p>之前把历史列表直接塞在本页右侧，结果是三件事挤在一屏：预览小、历史只有几行、
+ * <p>之前把历史列表直接塞在来源页右侧，结果是三件事挤在一屏：预览小、历史只有几行、
  * 形态开关夹在中间分不清属于哪一步。</p>
+ *
+ * <h2>切换动画</h2>
+ * <p>往里走从右滑入、往回走从左滑入，由 {@link PageHost} 负责。方向反了会让人
+ * 分不清自己是进是退，所以每一层都明确说自己往哪走。</p>
  */
 public final class SkinCapeDialog extends StackPane {
 
@@ -55,7 +61,11 @@ public final class SkinCapeDialog extends StackPane {
     /// 也不用 profileID，因为离线账户和同名在线账户的 profileID 有可能撞上。</p>
     private final String owner;
 
-    private final ElytraSkinCanvas canvas;
+    private final PageHost pages = new PageHost();
+    private final JFXDialogLayout layout = new JFXDialogLayout();
+
+    private final ToggleGroup formGroup = new ToggleGroup();
+    private ElytraSkinCanvas canvas;
 
     /// 当前预览的皮肤与披风贴图。
     private Image previewSkin = TexturesLoader.getDefaultSkinImage();
@@ -71,22 +81,27 @@ public final class SkinCapeDialog extends StackPane {
         this.dataDir = dataDir;
         this.owner = ownerOf(account);
 
-        JFXDialogLayout layout = new JFXDialogLayout();
         getChildren().setAll(layout);
+        layout.setHeading(new Label((mode == Mode.SKIN ? "切换皮肤" : "切换披风")
+                + " · " + account.getProfileName()));
 
-        String title = mode == Mode.SKIN ? "切换皮肤" : "切换披风";
-        layout.setHeading(new Label(title + " · " + account.getProfileName()));
+        pages.setPrefSize(COLUMN_WIDTH + 244 + 18, 300);
+        pages.setRoot(buildSourcePage());
 
+        // 底部按钮由当前页决定：来源页是“应用 / 取消”，内页是“返回”。
+        layout.setBody(pages);
+        layout.setActions(buildSourceActions());
+    }
+
+    // ==== 来源页 ====
+
+    private Node buildSourcePage() {
         // ---- 左侧：3D 预览（账户皮肤变化时自动刷新） ----
         canvas = new ElytraSkinCanvas(240, 250);
         StackPane previewPane = new StackPane(canvas);
         previewPane.setPrefSize(244, 254);
         previewPane.setMinSize(244, 254);
         previewPane.setMaxSize(244, 254);
-
-        // 形态组必须先建好：下面的皮肤绑定可能在构造过程中就回调 refreshPreview，
-        // 那时 formGroup 还是 null。
-        formGroup = new javafx.scene.control.ToggleGroup();
 
         ObservableValue<TexturesLoader.LoadedTexture> binding = TexturesLoader.skinBinding(account);
         javafx.beans.value.ChangeListener<TexturesLoader.LoadedTexture> listener = (obs, ov, nv) -> {
@@ -172,14 +187,6 @@ public final class SkinCapeDialog extends StackPane {
         }
         FormToggles.installStyleListener(formGroup, this::refreshPreview);
 
-        // ---- 应用 / 取消 ----
-        JFXButton applyButton = new JFXButton("应用");
-        applyButton.getStyleClass().add("dialog-accept");
-        applyButton.setOnAction(e -> applySelection());
-        JFXButton cancelButton = new JFXButton(i18n("button.cancel"));
-        cancelButton.getStyleClass().add("dialog-cancel");
-        cancelButton.setOnAction(e -> fireEvent(new DialogCloseEvent()));
-
         VBox right = new VBox(10, options, formTitle, formButtons);
         right.setPrefWidth(COLUMN_WIDTH);
         right.setMinWidth(COLUMN_WIDTH);
@@ -188,13 +195,18 @@ public final class SkinCapeDialog extends StackPane {
         HBox body = new HBox(18, previewPane, right);
         body.setPadding(new Insets(8));
         body.setAlignment(Pos.TOP_LEFT);
-        layout.setBody(body);
-        layout.setActions(applyButton, cancelButton);
-
-        refreshPreview();
+        return body;
     }
 
-    private javafx.scene.control.ToggleGroup formGroup;
+    private Node buildSourceActions() {
+        JFXButton applyButton = new JFXButton("应用");
+        applyButton.getStyleClass().add("dialog-accept");
+        applyButton.setOnAction(e -> applySelection());
+        JFXButton cancelButton = new JFXButton(i18n("button.cancel"));
+        cancelButton.getStyleClass().add("dialog-cancel");
+        cancelButton.setOnAction(e -> fireEvent(new DialogCloseEvent()));
+        return new HBox(10, applyButton, cancelButton);
+    }
 
     /// “曾使用过”按钮：带上件数，让人知道里面有没有东西。
     private void addHistoryOption(VBox options) {
@@ -208,13 +220,31 @@ public final class SkinCapeDialog extends StackPane {
         options.getChildren().add(button);
     }
 
-    /// 打开网格页；选中后进入确认页。
-    ///
-    /// <p>网格页会先关闭自己再开确认页：两个 JFXDialog 叠在一起时，关掉上面那个
-    /// 会把下面的也带走，看起来像闪了一下就没了。</p>
+    /// 打开网格页；选中后进入确认页。两层都用动画滑入。
     private void openHistory(String kind) {
-        HistoryGridPane.open(owner, kind, entry ->
-                Controllers.dialog(new HistoryConfirmPane(account, entry, null)));
+        if (!HistoryGridPage.hasEntries(owner, kind)) {
+            showInfo("还没有用过的" + ("cape".equals(kind) ? "披风" : "皮肤")
+                    + "。\n先用一次，之后就能在这里找回来。");
+            return;
+        }
+        pages.push(new HistoryGridPage(owner, kind,
+                entry -> pages.push(new HistoryConfirmPage(account, entry,
+                        () -> pages.pop(),   // 装备成功：回到来源页
+                        () -> pages.pop())), // 点返回：回到网格
+                () -> pages.pop()));
+        layout.setActions(buildInnerActions());
+    }
+
+    /// 内页只有一个“返回”：应用/取消属于来源页，内页里放会让人以为要在这里确认两次。
+    private Node buildInnerActions() {
+        JFXButton backButton = new JFXButton("返回");
+        backButton.getStyleClass().add("dialog-cancel");
+        backButton.setOnAction(e -> {
+            pages.pop();
+            if (!pages.canGoBack())
+                layout.setActions(buildSourceActions());
+        });
+        return new HBox(10, backButton);
     }
 
     /// 账户在历史里的标识。
@@ -252,7 +282,6 @@ public final class SkinCapeDialog extends StackPane {
         }
     }
 
-    /// 账户当前的手臂模型。披风预览要穿在用户自己的角色上，所以跟随账户而不是按钮。
     private boolean isCurrentSlim() {
         return AccountTextures.isSlim(account);
     }
@@ -405,5 +434,14 @@ public final class SkinCapeDialog extends StackPane {
 
     private static void showError(String message) {
         Controllers.dialog(message, "应用失败", MessageType.ERROR);
+    }
+
+    private static void showInfo(String message) {
+        Controllers.dialog(message, "曾使用过");
+    }
+
+    /// 供测试读取页面容器。
+    PageHost pageHost() {
+        return pages;
     }
 }

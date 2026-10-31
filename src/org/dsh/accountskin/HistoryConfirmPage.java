@@ -1,28 +1,22 @@
 package org.dsh.accountskin;
 
 import com.jfoenix.controls.JFXButton;
-import com.jfoenix.controls.JFXDialogLayout;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Label;
-import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.image.Image;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import org.jackhuang.hmcl.auth.Account;
-import org.jackhuang.hmcl.auth.microsoft.MicrosoftAccount;
-import org.jackhuang.hmcl.auth.offline.OfflineAccount;
-import org.jackhuang.hmcl.auth.yggdrasil.TextureModel;
 import org.jackhuang.hmcl.ui.Controllers;
-import org.jackhuang.hmcl.ui.construct.DialogCloseEvent;
 import org.jackhuang.hmcl.ui.construct.MessageDialogPane.MessageType;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-
-import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 
 /**
  * 确认页：选定一件材质后，调整形态并装备。
@@ -35,29 +29,43 @@ import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
  * <p>皮肤可切宽臂/纤细，披风可切普通/鞘翅，左侧预览实时跟着变。
  * 进入页面时按历史里记下的形态初始化——用户当初怎么穿的，就先给回什么。</p>
  */
-public final class HistoryConfirmPane extends StackPane {
+final class HistoryConfirmPage extends VBox {
 
     private final Account account;
     private final SkinHistory.Entry entry;
     private final boolean isCape;
     private final ToggleGroup formGroup = new ToggleGroup();
     private final ElytraSkinCanvas canvas;
-    private Image texture;
+    private final Image texture;
 
-    /// 装备成功后的回调，用来刷新上一层的列表。
-    private final Runnable onApplied;
+    private boolean capeRequested;
+    private boolean capeResolved;
+    private Image capeImage;
 
-    public HistoryConfirmPane(Account account, SkinHistory.Entry entry, Runnable onApplied) {
+    /**
+     * @param onApplied 装备成功后的回调，用来回到来源页
+     * @param onBack    返回上一页
+     */
+    HistoryConfirmPage(Account account, SkinHistory.Entry entry,
+                       Runnable onApplied, Runnable onBack) {
         this.account = account;
         this.entry = entry;
         this.isCape = "cape".equals(entry.kind);
-        this.onApplied = onApplied;
 
-        JFXDialogLayout layout = new JFXDialogLayout();
-        getChildren().setAll(layout);
+        setSpacing(10);
+        setPadding(new Insets(16, 18, 12, 18));
 
-        layout.setHeading(new Label((isCape ? "装备披风 · " : "装备皮肤 · ")
-                + (entry.name != null ? entry.name : "(未命名)")));
+        // ---- 标题栏 ----
+        JFXButton back = new JFXButton("返回");
+        back.getStyleClass().add("dialog-cancel");
+        back.setOnAction(e -> onBack.run());
+
+        Label title = new Label((isCape ? "装备披风 · " : "装备皮肤 · ")
+                + (entry.name != null ? entry.name : "(未命名)"));
+        title.setStyle("-fx-font-size: 15px; -fx-font-weight: bold;");
+
+        HBox header = new HBox(12, back, title);
+        header.setAlignment(Pos.CENTER_LEFT);
 
         // ---- 左侧：3D 预览 ----
         canvas = new ElytraSkinCanvas(240, 250);
@@ -89,7 +97,11 @@ public final class HistoryConfirmPane extends StackPane {
         source.setMaxWidth(230);
         source.setStyle("-fx-font-size: 11px; -fx-text-fill: -monet-on-surface-variant;");
 
-        VBox right = new VBox(10, formTitle, formButtons, source);
+        JFXButton confirm = new JFXButton("确认装备");
+        confirm.getStyleClass().add("dialog-accept");
+        confirm.setOnAction(e -> apply());
+
+        VBox right = new VBox(10, formTitle, formButtons, source, confirm);
         right.setAlignment(Pos.TOP_CENTER);
         right.setPrefWidth(240);
         right.setMinWidth(240);
@@ -97,26 +109,22 @@ public final class HistoryConfirmPane extends StackPane {
         right.setPadding(new Insets(20, 0, 0, 12));
 
         HBox body = new HBox(16, previewPane, right);
-        body.setPadding(new Insets(8));
         body.setAlignment(Pos.TOP_LEFT);
-        layout.setBody(body);
+        VBox.setVgrow(body, Priority.ALWAYS);
 
-        JFXButton confirm = new JFXButton("确认装备");
-        confirm.getStyleClass().add("dialog-accept");
-        confirm.setOnAction(e -> apply());
-        JFXButton cancel = new JFXButton(i18n("button.cancel"));
-        cancel.getStyleClass().add("dialog-cancel");
-        cancel.setOnAction(e -> fireEvent(new DialogCloseEvent()));
-        layout.setActions(confirm, cancel);
+        this.onApplied = onApplied;
+        getChildren().setAll(header, body);
 
         FormToggles.installStyleListener(formGroup, this::refreshPreview);
         refreshPreview();
     }
 
+    private final Runnable onApplied;
+
     private void refreshPreview() {
         boolean second = FormToggles.isSecond(formGroup);
         if (isCape) {
-            canvas.setModel(accountSkin(), accountSlim(), texture, second);
+            canvas.setModel(AccountTextures.skin(account), AccountTextures.isSlim(account), texture, second);
         } else {
             // 皮肤预览也把身上的披风画出来：不然换了皮肤看不出和披风搭不搭。
             canvas.setModel(texture, second, accountCape(), false);
@@ -138,19 +146,6 @@ public final class HistoryConfirmPane extends StackPane {
         return null;
     }
 
-    private boolean capeRequested;
-    private boolean capeResolved;
-    private Image capeImage;
-
-    /// 披风预览要穿在用户自己的角色上，所以取账户当前的皮肤。
-    private Image accountSkin() {
-        return AccountTextures.skin(account);
-    }
-
-    private boolean accountSlim() {
-        return AccountTextures.isSlim(account);
-    }
-
     private String describeSource() {
         StringBuilder text = new StringBuilder("来源：");
         if (entry.tid > 0)
@@ -159,7 +154,7 @@ public final class HistoryConfirmPane extends StackPane {
             text.append("本地文件");
         if (entry.author != null && !entry.author.isEmpty())
             text.append(" · ").append(entry.author);
-        text.append("\n上次使用：").append(HistoryGridPane.describeAge(entry.usedAt));
+        text.append("\n上次使用：").append(HistoryGridPage.describeAge(entry.usedAt));
         return text.toString();
     }
 
@@ -185,15 +180,15 @@ public final class HistoryConfirmPane extends StackPane {
         SkinHistory.get().record(entry);
 
         if (isCape) {
-            SkinApplier.applyCape(account, file, accountSlim(), this::done, HistoryConfirmPane::showError);
+            SkinApplier.applyCape(account, file, AccountTextures.isSlim(account), this::done,
+                    HistoryConfirmPage::showError);
         } else {
-            SkinApplier.applySkin(account, file, second, this::done, HistoryConfirmPane::showError);
+            SkinApplier.applySkin(account, file, second, this::done, HistoryConfirmPage::showError);
         }
     }
 
     private void done() {
         Controllers.showToast("已装备" + (isCape ? "披风" : "皮肤"));
-        fireEvent(new DialogCloseEvent());
         if (onApplied != null)
             onApplied.run();
     }
