@@ -115,33 +115,40 @@ public final class HistoryConfirmPane extends StackPane {
 
     private void refreshPreview() {
         boolean second = FormToggles.isSecond(formGroup);
-        if (isCape)
+        if (isCape) {
             canvas.setModel(accountSkin(), accountSlim(), texture, second);
-        else
-            canvas.setModel(texture, second, null, false);
+        } else {
+            // 皮肤预览也把身上的披风画出来：不然换了皮肤看不出和披风搭不搭。
+            canvas.setModel(texture, second, accountCape(), false);
+        }
     }
+
+    /// 账户当前穿着的披风。异步取，取到后重画一次。
+    private Image accountCape() {
+        if (capeResolved)
+            return capeImage;
+        if (!capeRequested) {
+            capeRequested = true;
+            AccountTextures.cape(account, image -> {
+                capeResolved = true;
+                capeImage = image;
+                refreshPreview();
+            });
+        }
+        return null;
+    }
+
+    private boolean capeRequested;
+    private boolean capeResolved;
+    private Image capeImage;
 
     /// 披风预览要穿在用户自己的角色上，所以取账户当前的皮肤。
     private Image accountSkin() {
-        try {
-            var binding = org.jackhuang.hmcl.game.TexturesLoader.skinBinding(account);
-            var value = binding.getValue();
-            if (value != null)
-                return value.image();
-        } catch (Throwable ignored) {
-        }
-        return org.jackhuang.hmcl.game.TexturesLoader.getDefaultSkinImage();
+        return AccountTextures.skin(account);
     }
 
     private boolean accountSlim() {
-        try {
-            if (account instanceof OfflineAccount offline && offline.getSkin() != null)
-                return offline.getSkin().textureModel() == TextureModel.SLIM;
-            var value = org.jackhuang.hmcl.game.TexturesLoader.skinBinding(account).getValue();
-            return value != null && "slim".equals(value.metadata().get("model"));
-        } catch (Throwable t) {
-            return false;
-        }
+        return AccountTextures.isSlim(account);
     }
 
     private String describeSource() {

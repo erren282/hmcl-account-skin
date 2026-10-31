@@ -100,6 +100,15 @@ public final class SkinCapeDialog extends StackPane {
             listener.changed(binding, null, current);
         binding.addListener(listener);
 
+        // 账户当前穿着的披风。skinBinding 只给皮肤，披风要另外取——不取的话
+        // 披风分区里永远是光背，看不到身上那件。
+        AccountTextures.cape(account, image -> {
+            if (pendingCapeFile == null) {
+                previewCape = image;
+                refreshPreview();
+            }
+        });
+
         // ---- 右侧：来源 ----
         VBox options = new VBox(8);
         options.setPrefWidth(COLUMN_WIDTH);
@@ -245,16 +254,7 @@ public final class SkinCapeDialog extends StackPane {
 
     /// 账户当前的手臂模型。披风预览要穿在用户自己的角色上，所以跟随账户而不是按钮。
     private boolean isCurrentSlim() {
-        try {
-            if (account instanceof OfflineAccount offline) {
-                return offline.getSkin() != null
-                        && offline.getSkin().textureModel() == org.jackhuang.hmcl.auth.yggdrasil.TextureModel.SLIM;
-            }
-            TexturesLoader.LoadedTexture texture = TexturesLoader.skinBinding(account).getValue();
-            return texture != null && "slim".equals(texture.metadata().get("model"));
-        } catch (Throwable t) {
-            return false;
-        }
+        return AccountTextures.isSlim(account);
     }
 
     private void loadSkinPreview(Path file) {
