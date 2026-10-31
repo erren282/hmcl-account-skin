@@ -5,19 +5,9 @@ import com.jfoenix.controls.JFXDialogLayout;
 import javafx.beans.value.ObservableValue;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
-import javafx.scene.Node;
-import javafx.scene.canvas.Canvas;
-import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Label;
-import javafx.scene.control.ListCell;
-import javafx.scene.control.ListView;
-import javafx.scene.control.Toggle;
-import javafx.scene.control.ToggleButton;
-import javafx.scene.control.ToggleGroup;
 import javafx.scene.image.Image;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
@@ -32,45 +22,28 @@ import org.jackhuang.hmcl.ui.construct.MessageDialogPane.MessageType;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 
 /**
- * 皮肤/披风切换主对话框：左侧 3D 预览，右侧来源按钮 + 曾使用过列表。
+ * 皮肤/披风切换主对话框：左侧 3D 预览，右侧来源按钮。
  *
- * <h2>为什么历史放在这里</h2>
- * <p>用户点“切换皮肤”时想要的多半是“换回上次那个”，让他先打开皮肤库再想起来去历史里翻，
- * 是多余的一步。所以历史直接列在来源按钮下面，一进来就看得见。</p>
+ * <h2>三个界面各管一件事</h2>
+ * <ul>
+ *   <li>本页：从哪来——皮肤库 / 本地文件 / 曾使用过；</li>
+ *   <li>{@link HistoryGridPane}：挑哪一件（网格，可删除）；</li>
+ *   <li>{@link HistoryConfirmPane}：怎么穿（形态 + 装备）。</li>
+ * </ul>
  *
- * <h2>模型与形态</h2>
- * <p>皮肤可切宽臂/纤细，披风可切普通/鞘翅，两者都实时反映到左侧预览；
- * 从历史里再次使用时按当时记下的模型恢复，而不是回到默认值。</p>
+ * <p>之前把历史列表直接塞在本页右侧，结果是三件事挤在一屏：预览小、历史只有几行、
+ * 形态开关夹在中间分不清属于哪一步。</p>
  */
 public final class SkinCapeDialog extends StackPane {
 
     public enum Mode { SKIN, CAPE }
 
-    /// 历史列表宽度。与预览并排，整个对话框保持在最小窗口（492 px 高）以内。
-    private static final double HISTORY_WIDTH = 268;
-
-    /// 列表最多显示几行的高度；超出后滚动。
-    private static final double HISTORY_HEIGHT = 190;
-
-    private static final String TAB_SELECTED =
-            "-fx-background-color: -monet-primary; -fx-text-fill: -monet-on-primary;"
-                    + " -fx-background-radius: 16; -fx-padding: 4 14 4 14; -fx-font-size: 12px; -fx-cursor: hand;";
-    private static final String TAB_UNSELECTED =
-            "-fx-background-color: -monet-surface-container-high; -fx-text-fill: -monet-on-surface-variant;"
-                    + " -fx-background-radius: 16; -fx-padding: 4 14 4 14; -fx-font-size: 12px; -fx-cursor: hand;";
-
-    /// 历史行选中态：主题色圆角边框 + 同色浅底，与皮肤库列表保持一致。
-    private static final String ROW_SELECTED =
-            "-fx-border-color: -monet-primary; -fx-border-width: 2; -fx-border-radius: 8;"
-                    + " -fx-background-radius: 8; -fx-background-color: derive(-monet-primary, 90%); -fx-padding: 4;";
-    private static final String ROW_UNSELECTED =
-            "-fx-border-color: transparent; -fx-border-width: 2; -fx-border-radius: 8;"
-                    + " -fx-background-radius: 8; -fx-padding: 4;";
+    /// 右列宽度。按钮和说明都按这个宽度折行，对话框尺寸才稳定。
+    private static final double COLUMN_WIDTH = 268;
 
     private final Account account;
     private final Mode mode;
@@ -82,32 +55,15 @@ public final class SkinCapeDialog extends StackPane {
     /// 也不用 profileID，因为离线账户和同名在线账户的 profileID 有可能撞上。</p>
     private final String owner;
 
-    private final ToggleGroup formGroup = new ToggleGroup();
     private final ElytraSkinCanvas canvas;
-    private final ListView<Row> historyView = new ListView<>();
-    private final Label historyEmpty = new Label();
-    private final VBox historyBox = new VBox(6);
-    private final StackPane previewPane = new StackPane();
 
-    /// 当前预览的皮肤贴图与披风贴图。来源按钮选中的本地文件会覆盖它们。
+    /// 当前预览的皮肤与披风贴图。
     private Image previewSkin = TexturesLoader.getDefaultSkinImage();
     private Image previewCape;
-    /// 来源按钮选中的本地文件；为 null 表示还没选，预览用账户当前的皮肤。
+
+    /// 已经选好、等“应用”的本地文件。
     private Path pendingSkinFile;
     private Path pendingCapeFile;
-
-    /// 历史列表的一行：可能是真实历史条目，也可能是“当前已在使用”的占位。
-    static final class Row {
-        final SkinHistory.Entry entry;
-        final Image thumbnail;
-        final boolean current;
-
-        Row(SkinHistory.Entry entry, Image thumbnail, boolean current) {
-            this.entry = entry;
-            this.thumbnail = thumbnail;
-            this.current = current;
-        }
-    }
 
     public SkinCapeDialog(Account account, Mode mode, Path dataDir) {
         this.account = account;
@@ -123,10 +79,14 @@ public final class SkinCapeDialog extends StackPane {
 
         // ---- 左侧：3D 预览（账户皮肤变化时自动刷新） ----
         canvas = new ElytraSkinCanvas(240, 250);
-        previewPane.getChildren().setAll(canvas);
+        StackPane previewPane = new StackPane(canvas);
         previewPane.setPrefSize(244, 254);
         previewPane.setMinSize(244, 254);
         previewPane.setMaxSize(244, 254);
+
+        // 形态组必须先建好：下面的皮肤绑定可能在构造过程中就回调 refreshPreview，
+        // 那时 formGroup 还是 null。
+        formGroup = new javafx.scene.control.ToggleGroup();
 
         ObservableValue<TexturesLoader.LoadedTexture> binding = TexturesLoader.skinBinding(account);
         javafx.beans.value.ChangeListener<TexturesLoader.LoadedTexture> listener = (obs, ov, nv) -> {
@@ -140,11 +100,11 @@ public final class SkinCapeDialog extends StackPane {
             listener.changed(binding, null, current);
         binding.addListener(listener);
 
-        // ---- 右侧：来源按钮 + 曾使用过 ----
+        // ---- 右侧：来源 ----
         VBox options = new VBox(8);
-        options.setPrefWidth(HISTORY_WIDTH);
-        options.setMinWidth(HISTORY_WIDTH);
-        options.setMaxWidth(HISTORY_WIDTH);
+        options.setPrefWidth(COLUMN_WIDTH);
+        options.setMinWidth(COLUMN_WIDTH);
+        options.setMaxWidth(COLUMN_WIDTH);
 
         if (mode == Mode.SKIN) {
             addOption(options, "在线皮肤（LittleSkin 皮肤库）",
@@ -155,6 +115,7 @@ public final class SkinCapeDialog extends StackPane {
                                 loadSkinPreview(file);
                             })));
             addOption(options, "自定义皮肤（选择本地文件）", () -> pickLocal(true));
+            addHistoryOption(options);
             if (account instanceof OfflineAccount)
                 addOption(options, "跟随 LittleSkin 皮肤源（按用户名）",
                         () -> SkinApplier.applyLittleSkinSource((OfflineAccount) account,
@@ -166,6 +127,7 @@ public final class SkinCapeDialog extends StackPane {
                         () -> Controllers.dialog(new MojangCapePane(microsoftAccount, this::closeAndRefresh)));
                 Label hint = new Label("微软账户的披风由 Mojang 官方管理，\n只能切换账户已拥有的官方披风，\n不支持上传自定义披风。");
                 hint.setWrapText(true);
+                hint.setMaxWidth(COLUMN_WIDTH);
                 hint.setStyle("-fx-font-size: 11px; -fx-text-fill: -monet-on-surface-variant;");
                 options.getChildren().add(hint);
             } else {
@@ -177,6 +139,7 @@ public final class SkinCapeDialog extends StackPane {
                                     loadCapePreview(file);
                                 })));
                 addOption(options, "自定义披风（选择本地文件）", () -> pickLocal(false));
+                addHistoryOption(options);
                 if (account instanceof OfflineAccount)
                     addOption(options, "跟随 LittleSkin 皮肤源（皮肤与披风均跟随）",
                             () -> SkinApplier.applyLittleSkinSource((OfflineAccount) account,
@@ -185,33 +148,20 @@ public final class SkinCapeDialog extends StackPane {
         }
 
         // ---- 形态切换 ----
+        Label formTitle = new Label(mode == Mode.SKIN ? "手臂模型" : "披风形态");
+        formTitle.setStyle("-fx-font-size: 12px; -fx-text-fill: -monet-on-surface-variant;");
         HBox formButtons = new HBox(8);
         formButtons.setAlignment(Pos.CENTER);
         if (mode == Mode.SKIN) {
             formButtons.getChildren().setAll(
-                    formToggle("史蒂夫形态", false, true),
-                    formToggle("艾利克斯形态", true, false));
+                    FormToggles.create(formGroup, "史蒂夫形态", false, true),
+                    FormToggles.create(formGroup, "艾利克斯形态", true, false));
         } else {
             formButtons.getChildren().setAll(
-                    formToggle("普通形态", false, true),
-                    formToggle("鞘翅形态", true, false));
+                    FormToggles.create(formGroup, "普通形态", false, true),
+                    FormToggles.create(formGroup, "鞘翅形态", true, false));
         }
-
-        // ---- 曾使用过 ----
-        Label historyTitle = new Label("曾使用过");
-        historyTitle.setStyle("-fx-font-size: 12px; -fx-text-fill: -monet-on-surface-variant;");
-
-        historyView.setPrefSize(HISTORY_WIDTH, HISTORY_HEIGHT);
-        historyView.setMinSize(HISTORY_WIDTH, HISTORY_HEIGHT);
-        historyView.setMaxSize(HISTORY_WIDTH, HISTORY_HEIGHT);
-        historyView.setCellFactory(view -> new HistoryCell());
-        historyView.setPlaceholder(placeholder());
-        historyView.getSelectionModel().selectedItemProperty().addListener((obs, ov, nv) -> {
-            if (nv != null && nv.entry != null)
-                previewHistory(nv.entry);
-        });
-
-        historyBox.getChildren().setAll(historyTitle, historyView);
+        FormToggles.installStyleListener(formGroup, this::refreshPreview);
 
         // ---- 应用 / 取消 ----
         JFXButton applyButton = new JFXButton("应用");
@@ -221,28 +171,41 @@ public final class SkinCapeDialog extends StackPane {
         cancelButton.getStyleClass().add("dialog-cancel");
         cancelButton.setOnAction(e -> fireEvent(new DialogCloseEvent()));
 
-        VBox right = new VBox(10, options, formButtons, historyBox);
-        right.setPrefWidth(HISTORY_WIDTH);
-        right.setMinWidth(HISTORY_WIDTH);
-        right.setMaxWidth(HISTORY_WIDTH);
+        VBox right = new VBox(10, options, formTitle, formButtons);
+        right.setPrefWidth(COLUMN_WIDTH);
+        right.setMinWidth(COLUMN_WIDTH);
+        right.setMaxWidth(COLUMN_WIDTH);
 
         HBox body = new HBox(18, previewPane, right);
         body.setPadding(new Insets(8));
         body.setAlignment(Pos.TOP_LEFT);
-        VBox.setVgrow(options, Priority.NEVER);
         layout.setBody(body);
         layout.setActions(applyButton, cancelButton);
 
-        formGroup.selectedToggleProperty().addListener((obs, ov, nv) -> {
-            if (ov != null)
-                styleToggle((ToggleButton) ov, false);
-            if (nv != null)
-                styleToggle((ToggleButton) nv, true);
-            refreshPreview();
-        });
-
-        reloadHistory();
         refreshPreview();
+    }
+
+    private javafx.scene.control.ToggleGroup formGroup;
+
+    /// “曾使用过”按钮：带上件数，让人知道里面有没有东西。
+    private void addHistoryOption(VBox options) {
+        String kind = mode == Mode.SKIN ? "skin" : "cape";
+        int count = SkinHistory.get().count(owner, kind);
+        JFXButton button = FXUtils.newBorderButton(count > 0
+                ? "曾使用过（" + count + "）"
+                : "曾使用过");
+        button.setMaxWidth(Double.MAX_VALUE);
+        button.setOnAction(e -> openHistory(kind));
+        options.getChildren().add(button);
+    }
+
+    /// 打开网格页；选中后进入确认页。
+    ///
+    /// <p>网格页会先关闭自己再开确认页：两个 JFXDialog 叠在一起时，关掉上面那个
+    /// 会把下面的也带走，看起来像闪了一下就没了。</p>
+    private void openHistory(String kind) {
+        HistoryGridPane.open(owner, kind, entry ->
+                Controllers.dialog(new HistoryConfirmPane(account, entry, null)));
     }
 
     /// 账户在历史里的标识。
@@ -267,54 +230,16 @@ public final class SkinCapeDialog extends StackPane {
         }
     }
 
-    // ==== 形态 ====
-
-    private ToggleButton formToggle(String text, boolean secondForm, boolean selected) {
-        ToggleButton button = new ToggleButton(text);
-        button.setToggleGroup(formGroup);
-        button.setUserData(secondForm);
-        button.setSelected(selected);
-        button.setMaxWidth(Double.MAX_VALUE);
-        HBox.setHgrow(button, Priority.ALWAYS);
-        styleToggle(button, selected);
-        return button;
-    }
-
-    private void styleToggle(ToggleButton button, boolean selected) {
-        button.setStyle(selected
-                ? "-fx-background-color: -monet-primary; -fx-text-fill: -monet-on-primary;"
-                + " -fx-background-radius: 18; -fx-padding: 4 10 4 10; -fx-font-size: 12px; -fx-cursor: hand;"
-                : "-fx-background-color: -monet-surface-container-high; -fx-text-fill: -monet-on-surface-variant;"
-                + " -fx-background-radius: 18; -fx-padding: 4 10 4 10; -fx-font-size: 12px; -fx-cursor: hand;");
-    }
-
-    private boolean secondForm() {
-        Toggle toggle = formGroup.getSelectedToggle();
-        return toggle != null && Boolean.TRUE.equals(toggle.getUserData());
-    }
-
-    private void selectForm(boolean second) {
-        for (Toggle toggle : formGroup.getToggles()) {
-            if (Boolean.valueOf(second).equals(toggle.getUserData())) {
-                toggle.setSelected(true);
-                return;
-            }
-        }
-    }
-
     // ==== 预览 ====
 
     /// 按当前皮肤、披风与形态刷新左侧预览。
     private void refreshPreview() {
-        boolean second = secondForm();
+        boolean second = FormToggles.isSecond(formGroup);
         if (mode == Mode.SKIN) {
             canvas.setModel(previewSkin, second, previewCape, false);
         } else {
             // 披风分区：形态按钮在普通/鞘翅之间切换，皮肤保持账户当前那张。
-            if (second)
-                canvas.setModel(previewSkin, isCurrentSlim(), previewCape, true);
-            else
-                canvas.setModel(previewSkin, isCurrentSlim(), previewCape, false);
+            canvas.setModel(previewSkin, isCurrentSlim(), previewCape, second);
         }
     }
 
@@ -332,7 +257,6 @@ public final class SkinCapeDialog extends StackPane {
         }
     }
 
-    /// 读本地皮肤文件并显示预览。读不出来就在预览上方给一句提示。
     private void loadSkinPreview(Path file) {
         try (var in = Files.newInputStream(file)) {
             Image image = new Image(in);
@@ -357,34 +281,13 @@ public final class SkinCapeDialog extends StackPane {
         }
     }
 
-    /// 选中历史条目时预览它，并按当时记下的模型/形态恢复按钮。
-    private void previewHistory(SkinHistory.Entry entry) {
-        try (var in = Files.newInputStream(Path.of(entry.path))) {
-            Image image = new Image(in);
-            if (image.isError())
-                throw new IllegalStateException("不是有效的图片");
-            if (mode == Mode.SKIN) {
-                pendingSkinFile = Path.of(entry.path);
-                previewSkin = image;
-                selectForm(entry.slim);
-            } else {
-                pendingCapeFile = Path.of(entry.path);
-                previewCape = image;
-                selectForm(entry.elytra);
-            }
-            refreshPreview();
-        } catch (Throwable e) {
-            showError("这件材质读不出来了：" + e.getMessage());
-        }
-    }
-
     // ==== 应用 ====
 
     private void applySelection() {
+        boolean second = FormToggles.isSecond(formGroup);
         if (mode == Mode.SKIN) {
             Path file = pendingSkinFile;
             if (file == null) {
-                // 没选新皮肤：只把模型改动应用上去。
                 applyModelOnly();
                 return;
             }
@@ -392,9 +295,8 @@ public final class SkinCapeDialog extends StackPane {
                 showError("这个皮肤文件已经不在了，请重新选择");
                 return;
             }
-            boolean slim = secondForm();
-            record(file, slim, false);
-            SkinApplier.applySkin(account, file, slim, this::closeAndRefresh, SkinCapeDialog::showError);
+            record(file, second, false);
+            SkinApplier.applySkin(account, file, second, this::closeAndRefresh, SkinCapeDialog::showError);
         } else {
             Path file = pendingCapeFile;
             if (file == null) {
@@ -405,7 +307,7 @@ public final class SkinCapeDialog extends StackPane {
                 showError("这个披风文件已经不在了，请重新选择");
                 return;
             }
-            record(file, isCurrentSlim(), secondForm());
+            record(file, isCurrentSlim(), second);
             SkinApplier.applyCape(account, file, isCurrentSlim(), this::closeAndRefresh, SkinCapeDialog::showError);
         }
     }
@@ -415,7 +317,7 @@ public final class SkinCapeDialog extends StackPane {
     /// <p>离线账户可以就地改 `Skin.textureModel`；在线账户必须重新上传同一张图并带上
     /// 新的 variant，所以这里只对离线账户开放，其余给一句说明。</p>
     private void applyModelOnly() {
-        boolean slim = secondForm();
+        boolean slim = FormToggles.isSecond(formGroup);
         if (account instanceof OfflineAccount offline) {
             org.jackhuang.hmcl.auth.offline.Skin skin = offline.getSkin();
             if (skin == null || skin.type() != org.jackhuang.hmcl.auth.offline.Skin.Type.LOCAL_FILE
@@ -469,132 +371,6 @@ public final class SkinCapeDialog extends StackPane {
         } catch (NumberFormatException e) {
             return 0;
         }
-    }
-
-    // ==== 历史列表 ====
-
-    private void reloadHistory() {
-        String kind = mode == Mode.SKIN ? "skin" : "cape";
-        List<SkinHistory.Entry> entries = SkinHistory.get().entries(owner, kind);
-        historyView.getItems().clear();
-        for (SkinHistory.Entry entry : entries) {
-            Image thumb = null;
-            try {
-                thumb = new Image(Path.of(entry.path).toUri().toString());
-            } catch (Throwable ignored) {
-            }
-            historyView.getItems().add(new Row(entry, thumb, false));
-        }
-        boolean empty = historyView.getItems().isEmpty();
-        historyEmpty.setText(mode == Mode.SKIN
-                ? "还没有换过皮肤。\n换过之后会记在这里，点一下就能换回去。"
-                : "还没有换过披风。\n换过之后会记在这里，点一下就能换回去。");
-        historyEmpty.setVisible(empty);
-        historyEmpty.setManaged(empty);
-        historyView.setVisible(!empty);
-        historyView.setManaged(!empty);
-    }
-
-    private Label placeholder() {
-        Label label = new Label("还没有换过");
-        label.setStyle("-fx-font-size: 11px;");
-        label.setWrapText(true);
-        label.setMaxWidth(HISTORY_WIDTH - 40);
-        return label;
-    }
-
-    /// 历史行：缩略图 + 名称 + 上次使用的模型/形态与时间，右侧一个删除按钮。
-    private final class HistoryCell extends ListCell<Row> {
-        private final Canvas thumb = new Canvas(36, 36);
-        private final Label titleLabel = new Label();
-        private final Label subtitleLabel = new Label();
-        private final JFXButton deleteButton = new JFXButton();
-        private final HBox box;
-
-        HistoryCell() {
-            titleLabel.getStyleClass().add("title");
-            titleLabel.setStyle("-fx-font-size: 12px;");
-            subtitleLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: -monet-on-surface-variant;");
-            VBox text = new VBox(1, titleLabel, subtitleLabel);
-            HBox.setHgrow(text, Priority.ALWAYS);
-            text.setMaxWidth(HISTORY_WIDTH - 90);
-
-            deleteButton.setGraphic(org.jackhuang.hmcl.ui.SVG.DELETE.createIcon());
-            deleteButton.getStyleClass().add("round-button");
-            deleteButton.setStyle("-fx-padding: 4;");
-            FXUtils.installFastTooltip(deleteButton, "从曾使用过里删除");
-            deleteButton.setOnAction(e -> {
-                Row row = getItem();
-                if (row == null || row.entry == null)
-                    return;
-                SkinHistory.get().forget(row.entry);
-                reloadHistory();
-            });
-
-            Region spacer = new Region();
-            HBox.setHgrow(spacer, Priority.ALWAYS);
-            box = new HBox(8, thumb, text, spacer, deleteButton);
-            box.setAlignment(Pos.CENTER_LEFT);
-            setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
-            setPrefHeight(50);
-
-            // 选中态必须跟着 selection 走，而不是在 updateItem 里读一次 isSelected()：
-            // 点击只会改变选中状态、不会重建单元格，那样边框要等滚动一下才出现。
-            selectedProperty().addListener((obs, wasSelected, isSelected) ->
-                    applySelectionStyle(isSelected));
-        }
-
-        private void applySelectionStyle(boolean selected) {
-            setStyle(selected ? ROW_SELECTED : ROW_UNSELECTED);
-        }
-
-        @Override
-        protected void updateItem(Row row, boolean empty) {
-            super.updateItem(row, empty);
-            if (empty || row == null) {
-                setGraphic(null);
-                applySelectionStyle(false);
-                return;
-            }
-            SkinHistory.Entry entry = row.entry;
-            Thumbnails.draw(thumb, row.thumbnail, mode == Mode.CAPE);
-
-            titleLabel.setText(entry.name != null ? entry.name : "(未命名)");
-            StringBuilder detail = new StringBuilder();
-            if (mode == Mode.SKIN)
-                detail.append(entry.slim ? "艾利克斯" : "史蒂夫");
-            else
-                detail.append(entry.elytra ? "鞘翅" : "普通披风");
-            if (entry.author != null && !entry.author.isEmpty())
-                detail.append(" · ").append(entry.author);
-            detail.append(" · ").append(describeAge(entry.usedAt));
-            subtitleLabel.setText(detail.toString());
-
-            setGraphic(box);
-            applySelectionStyle(isSelected());
-        }
-    }
-
-    /// “刚刚 / 3 小时前 / 2 天前”这样的相对时间，比绝对时间戳好读。
-    static String describeAge(long usedAt) {
-        long delta = System.currentTimeMillis() - usedAt;
-        if (delta < 0)
-            return "刚刚";
-        long minutes = delta / 60000;
-        if (minutes < 1)
-            return "刚刚";
-        if (minutes < 60)
-            return minutes + " 分钟前";
-        long hours = minutes / 60;
-        if (hours < 24)
-            return hours + " 小时前";
-        long days = hours / 24;
-        if (days < 30)
-            return days + " 天前";
-        long months = days / 30;
-        if (months < 12)
-            return months + " 个月前";
-        return (months / 12) + " 年前";
     }
 
     // ==== 杂项 ====

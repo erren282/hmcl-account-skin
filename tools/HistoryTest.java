@@ -91,13 +91,13 @@ public final class HistoryTest {
             System.out.println();
             System.out.println("=== 相对时间 ===");
             long now = System.currentTimeMillis();
-            check("a fresh entry reads 刚刚", "刚刚".equals(SkinCapeDialog.describeAge(now)));
+            check("a fresh entry reads 刚刚", "刚刚".equals(HistoryGridPane.describeAge(now)));
             check("five minutes ago", "5 分钟前".equals(
-                    SkinCapeDialog.describeAge(now - 5 * 60_000L)));
+                    HistoryGridPane.describeAge(now - 5 * 60_000L)));
             check("three hours ago", "3 小时前".equals(
-                    SkinCapeDialog.describeAge(now - 3 * 3_600_000L)));
+                    HistoryGridPane.describeAge(now - 3 * 3_600_000L)));
             check("two days ago", "2 天前".equals(
-                    SkinCapeDialog.describeAge(now - 2 * 86_400_000L)));
+                    HistoryGridPane.describeAge(now - 2 * 86_400_000L)));
 
             System.out.println();
             System.out.println("=== 模型与形态随记录保存 ===");

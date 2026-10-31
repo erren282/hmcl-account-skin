@@ -4,10 +4,12 @@ import javafx.application.Platform;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
-import javafx.scene.control.ListCell;
-import javafx.scene.control.ListView;
+import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.layout.StackPane;
+import javafx.scene.layout.TilePane;
 import javafx.stage.Stage;
+import org.jackhuang.hmcl.auth.Account;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,14 +20,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Checks that a history row shows a selection border when picked.
+ * Checks the 曾使用过 grid: it shows one card per record, and the delete button
+ * removes only that card.
  *
  * <h2>Why this is measured rather than asserted on the code</h2>
- * <p>The reported problem was that no border appeared on the character card. The cause
- * was that the style was computed inside {@code updateItem}, which JavaFX only calls
- * when the item changes — a click changes the selection, not the item, so the border
- * only showed up after scrolling. That is a runtime behaviour: the cell has to be
- * selected for real and its style read back.</p>
+ * <p>Both things a user notices here are runtime facts: how many cards end up in the
+ * tile pane, and whether clicking the card's delete button actually shrinks the grid
+ * without closing the page. Neither is visible from reading the source.</p>
  */
 public final class SelectionTest {
 
@@ -37,13 +38,11 @@ public final class SelectionTest {
         Platform.setImplicitExit(false);
         pump();
 
-        Path dir = Files.createTempDirectory("account-skin-selection");
+        Path dir = Files.createTempDirectory("account-skin-grid");
         AtomicReference<Throwable> failure = new AtomicReference<>();
         try {
             SkinHistory.initialize(dir.resolve("history.json"));
-            // 同一个账户对象既用来种数据、又用来开对话框：历史是按账户分的，
-            // 两边算出来的 owner 必须一致，否则列表是空的。
-            org.jackhuang.hmcl.auth.offline.OfflineAccount account = offlineAccount();
+            Account account = offlineAccount("qwen");
             seed(dir, account);
             run(dir, account);
         } catch (Throwable t) {
@@ -65,10 +64,10 @@ public final class SelectionTest {
         System.exit(failed > 0 ? 1 : 0);
     }
 
-    /// Puts two skins into the account's history so the list has rows to select.
-    private static void seed(Path dir, org.jackhuang.hmcl.auth.Account account) throws Exception {
+    /// Puts three skins into the account's history so the grid has cards.
+    private static void seed(Path dir, Account account) throws Exception {
         String owner = SkinCapeDialog.ownerOf(account);
-        for (int i = 1; i <= 2; i++) {
+        for (int i = 1; i <= 3; i++) {
             Path file = dir.resolve("skin" + i + ".png");
             Files.write(file, new byte[]{(byte) 0x89, 'P', 'N', 'G'});
             SkinHistory.Entry entry = new SkinHistory.Entry();
@@ -82,109 +81,92 @@ public final class SelectionTest {
         }
     }
 
-    private static void run(Path dir, org.jackhuang.hmcl.auth.Account account) throws Exception {
+    private static void run(Path dir, Account account) throws Exception {
+        String owner = SkinCapeDialog.ownerOf(account);
         AtomicReference<Stage> stageRef = new AtomicReference<>();
-        AtomicReference<SkinCapeDialog> dialogRef = new AtomicReference<>();
+        AtomicReference<HistoryGridPane> paneRef = new AtomicReference<>();
+        AtomicReference<SkinHistory.Entry> picked = new AtomicReference<>();
 
         onFx(() -> {
-            SkinCapeDialog dialog = new SkinCapeDialog(account, SkinCapeDialog.Mode.SKIN, dir);
+            HistoryGridPane pane = new HistoryGridPane(owner, "skin", picked::set);
             Stage stage = new Stage();
-            stage.setScene(new Scene(new StackPane(dialog), 1000, 800));
+            stage.setScene(new Scene(new StackPane(pane), 1000, 800));
             stage.show();
             stageRef.set(stage);
-            dialogRef.set(dialog);
+            paneRef.set(pane);
         });
         pump(10);
 
-        ListView<?> list = findListView(dialogRef.get());
-        check("the dialog has a history list", list != null);
-        if (list == null) {
+        TilePane grid = findTilePane(paneRef.get());
+        check("the page has a card grid", grid != null);
+        if (grid == null) {
             onFx(() -> stageRef.get().close());
             return;
         }
-        check("the history list has rows", list.getItems().size() == 2);
 
         System.out.println();
-        System.out.println("=== 未选中时没有边框 ===");
-        String beforeStyle = cellStyle(list, 0);
-        check("the first row starts without a border",
-                beforeStyle != null && beforeStyle.contains("transparent"));
+        System.out.println("=== 每件材质一张卡片 ===");
+        check("one card per record", grid.getChildren().size() == 3);
+        check("the cards show names",
+                allNodes(grid).stream().anyMatch(n -> n instanceof Label label
+                        && "skin 1".equals(label.getText())));
+        check("it is a grid, not a one-column list",
+                grid.getPrefColumns() > 1);
 
         System.out.println();
-        System.out.println("=== 点一下，边框立刻出现 ===");
-        onFx(() -> list.getSelectionModel().select(0));
+        System.out.println("=== 删除只删一张卡 ===");
+        AtomicReference<Node> firstCard = new AtomicReference<>();
+        onFx(() -> firstCard.set(grid.getChildren().get(0)));
+        com.jfoenix.controls.JFXButton deleteButton = findDeleteButton(firstCard.get());
+        check("the card has a delete button", deleteButton != null);
+
+        onFx(() -> deleteButton.fire());
         pump(6);
-        String afterStyle = cellStyle(list, 0);
-        check("the selected row gets a border colour",
-                afterStyle != null && afterStyle.contains("-monet-primary"));
-        check("the border is two pixels", afterStyle != null && afterStyle.contains("-fx-border-width: 2"));
-        check("it is no longer transparent",
-                afterStyle != null && !afterStyle.contains("border-color: transparent"));
-        check("it gets a tinted background", afterStyle != null && afterStyle.contains("background-color"));
+        check("one card was removed", grid.getChildren().size() == 2);
+        check("the history shrank too",
+                SkinHistory.get().count(owner, "skin") == 2);
+        check("the page is still open", paneRef.get().getScene() != null);
 
         System.out.println();
-        System.out.println("=== 换一行，边框跟着走 ===");
-        onFx(() -> list.getSelectionModel().select(1));
-        pump(6);
-        String firstAfter = cellStyle(list, 0);
-        String secondAfter = cellStyle(list, 1);
-        check("the previously selected row lost its border",
-                firstAfter != null && firstAfter.contains("border-color: transparent"));
-        check("the newly selected row has one",
-                secondAfter != null && secondAfter.contains("-monet-primary"));
+        System.out.println("=== 点卡片选中并回调 ===");
+        Node secondCard = null;
+        onFx(() -> { });
+        AtomicReference<Node> card = new AtomicReference<>();
+        onFx(() -> card.set(grid.getChildren().get(0)));
+        onFx(() -> card.get().fireEvent(new javafx.scene.input.MouseEvent(
+                javafx.scene.input.MouseEvent.MOUSE_CLICKED, 0, 0, 0, 0,
+                javafx.scene.input.MouseButton.PRIMARY, 1,
+                false, false, false, false, true, false, false, true, false, false, null)));
+        pump(4);
+        check("picking a card reports the entry", picked.get() != null);
+        check("and it is one of the remaining ones",
+                picked.get() != null && SkinHistory.get().count(owner, "skin") == 2);
 
         onFx(() -> stageRef.get().close());
         pump(4);
 
         System.out.println();
-        System.out.println("=== 换一个账户，列表跟着换 ===");
-        // Two different offline accounts must not see each other's history: this is the
-        // whole point of the per-account change, so it is checked through the real dialog.
-        AtomicReference<Stage> secondStage = new AtomicReference<>();
-        AtomicReference<SkinCapeDialog> secondDialog = new AtomicReference<>();
-        onFx(() -> {
-            SkinCapeDialog dialog = new SkinCapeDialog(
-                    offlineAccount("someone-else"), SkinCapeDialog.Mode.SKIN, dir);
-            Stage stage = new Stage();
-            stage.setScene(new Scene(new StackPane(dialog), 1000, 800));
-            stage.show();
-            secondStage.set(stage);
-            secondDialog.set(dialog);
-        });
-        pump(10);
-
-        ListView<?> otherList = findListView(secondDialog.get());
-        check("the other account's list is empty", otherList != null && otherList.getItems().isEmpty());
-
-        onFx(() -> secondStage.get().close());
-        pump(4);
+        System.out.println("=== 另一个账户看不到这些 ===");
+        Account other = offlineAccount("someone-else");
+        check("their history is empty",
+                SkinHistory.get().entries(SkinCapeDialog.ownerOf(other), "skin").isEmpty());
     }
 
-    /// Reads the inline style of the cell at {@code index}, which is what paints the border.
-    private static String cellStyle(ListView<?> list, int index) throws Exception {
-        AtomicReference<String> style = new AtomicReference<>();
-        onFx(() -> {
-            for (Node node : allNodes(list)) {
-                if (node instanceof ListCell<?> cell && cell.getIndex() == index && !cell.isEmpty()) {
-                    style.set(cell.getStyle());
-                    return;
-                }
-            }
-        });
-        return style.get();
+    /// The grid's delete button is the one whose graphic is an SVG icon and which sits
+    /// on the card; find it by walking the card.
+    private static com.jfoenix.controls.JFXButton findDeleteButton(Node card) {
+        for (Node node : allNodes(card)) {
+            if (node instanceof com.jfoenix.controls.JFXButton button && button.getGraphic() != null)
+                return button;
+        }
+        return null;
     }
 
-    private static ListView<?> findListView(Parent root) throws Exception {
-        AtomicReference<ListView<?>> found = new AtomicReference<>();
-        onFx(() -> {
-            for (Node node : allNodes(root)) {
-                if (node instanceof ListView<?> list) {
-                    found.set(list);
-                    return;
-                }
-            }
-        });
-        return found.get();
+    private static TilePane findTilePane(Parent root) {
+        for (Node node : allNodes(root))
+            if (node instanceof TilePane tile)
+                return tile;
+        return null;
     }
 
     private static List<Node> allNodes(Node root) {
@@ -200,11 +182,7 @@ public final class SelectionTest {
                 collect(child, out);
     }
 
-    private static org.jackhuang.hmcl.auth.offline.OfflineAccount offlineAccount() {
-        return offlineAccount("qwen");
-    }
-
-    private static org.jackhuang.hmcl.auth.offline.OfflineAccount offlineAccount(String name) {
+    private static Account offlineAccount(String name) {
         org.jackhuang.hmcl.auth.offline.OfflineAccountFactory factory =
                 new org.jackhuang.hmcl.auth.offline.OfflineAccountFactory(
                         new org.jackhuang.hmcl.auth.authlibinjector.SimpleAuthlibInjectorArtifactProvider(
