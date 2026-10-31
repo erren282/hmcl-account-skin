@@ -75,6 +75,25 @@ public final class LittleSkinLibraryPane extends StackPane {
         public String nickname;
         public String hash;
         public boolean hd;
+
+        /// 曾使用过条目：本地材质文件。非 null 时整个列表按本地文件走，
+        /// 不查 /skinlib/info、不下载，直接用这份文件预览与应用。
+        public String path;
+        /// 曾使用过条目：最后一次使用的时刻，用于显示“刚刚 / 3 天前”。
+        public long usedAt;
+
+        /// 从历史记录转成列表项。
+        static Item fromHistory(SkinHistory.Entry entry) {
+            Item item = new Item();
+            item.tid = entry.tid;
+            item.name = entry.name;
+            item.type = entry.type;
+            item.nickname = entry.author;
+            item.hd = entry.hd;
+            item.path = entry.path;
+            item.usedAt = entry.usedAt;
+            return item;
+        }
     }
 
     /// Pagination envelope of the skin library API (Laravel simple pagination).
@@ -140,6 +159,14 @@ public final class LittleSkinLibraryPane extends StackPane {
     private final JFXButton applyButton = new JFXButton("应用所选");
     private final ToggleGroup formGroup = new ToggleGroup();
     private final ElytraSkinCanvas previewCanvas = new ElytraSkinCanvas(220, 270);
+
+    // ---- 皮肤库 / 曾使用过 两个分区 ----
+    private final JFXButton libraryTab = new JFXButton("皮肤库");
+    private final JFXButton historyTab = new JFXButton("曾使用过");
+    /// 当前显示的分区。历史分区不联网，所以翻页、搜索框在它里面都不适用。
+    private boolean showingHistory = false;
+    /// 分区按钮上的条数角标，切分区时刷新。
+    private final Label historyCountLabel = new Label();
 
     /// Downloaded texture images keyed by tid, shared between thumbnails and the 3D preview.
     private final Map<Integer, Image> textureCache = new HashMap<>();
@@ -235,7 +262,21 @@ public final class LittleSkinLibraryPane extends StackPane {
         top.setMinWidth(LIST_WIDTH);
         top.setMaxWidth(LIST_WIDTH);
 
-        VBox left = new VBox(8, top, listView, pager, statusLabel);
+        // ---- 分区切换：皮肤库 / 曾使用过 ----
+        //
+        // 两个分区放在同一个对话框里，而不是各开一个入口：用户来这里的目的一般是
+        // “换成上次那个”，让他先选来源再选具体哪一件是多余的一步。
+        HBox tabs = new HBox(8, libraryTab, historyTab);
+        tabs.setAlignment(Pos.CENTER_LEFT);
+        tabs.setPrefWidth(LIST_WIDTH);
+        tabs.setMinWidth(LIST_WIDTH);
+        tabs.setMaxWidth(LIST_WIDTH);
+        historyTab.setGraphic(historyCountLabel);
+        historyCountLabel.setStyle("-fx-font-size: 11px;");
+        libraryTab.setOnAction(e -> showSection(false));
+        historyTab.setOnAction(e -> showSection(true));
+
+        VBox left = new VBox(8, tabs, top, listView, pager, statusLabel);
         left.setPrefWidth(LIST_WIDTH);
         left.setMinWidth(LIST_WIDTH);
         left.setMaxWidth(LIST_WIDTH);
@@ -300,8 +341,14 @@ public final class LittleSkinLibraryPane extends StackPane {
         });
 
         if (initialFetchEnabled) {
-            fetch();
+            showSection(false);
+        } else {
+            // 测试路径：只摆好分区按钮的样子，不联网。
+            styleSectionTab(libraryTab, true);
+            styleSectionTab(historyTab, false);
+            pageLabel.setText("第 1 页");
         }
+        refreshHistoryCount();
     }
     /// A wrapped, width-bounded label for the list's empty state.
     ///
@@ -340,14 +387,14 @@ public final class LittleSkinLibraryPane extends StackPane {
     /// Chooses the list height for a given amount of vertical space.
     ///
     /// <p>The dialog has to fit the launcher's minimum content height (492 px). Its
-    /// other parts — heading, actions, canvas, status line, paddings — take roughly
-    /// 250 px, so the list gets whatever is left, clamped to a usable range. Before
-    /// this the height was hard-coded at 380 px, which made the dialog 524 px tall and
-    /// too big for the smallest window.</p>
+    /// other parts — heading, actions, canvas, the 皮肤库/曾使用过 switch, status line,
+    /// paddings — take roughly 288 px, so the list gets whatever is left, clamped to a
+    /// usable range. Before this the height was hard-coded at 380 px, which made the
+    /// dialog 524 px tall and too big for the smallest window.</p>
     ///
     /// <param name="availableHeight">the room for the whole dialog</param>
     static double listHeightFor(double availableHeight) {
-        double reserved = 250;
+        double reserved = 288;
         double room = availableHeight - reserved;
         if (room < LIST_MIN_HEIGHT) {
             return LIST_MIN_HEIGHT;
@@ -359,6 +406,114 @@ public final class LittleSkinLibraryPane extends StackPane {
     void clearListForTest() {
         loading = false;
         listView.setItems(FXCollections.observableArrayList());
+    }
+
+    /// 切到皮肤库 / 曾使用过。
+    ///
+    /// <p>历史分区完全本地：不联网、不分页、也不响应搜索框。所以进去时要把搜索框和
+    /// 翻页藏掉，否则它们留在那里却什么都不做，会让人以为卡住了。</p>
+    private void showSection(boolean history) {
+        if (showingHistory == history && !listView.getItems().isEmpty())
+            return;
+        showingHistory = history;
+        styleSectionTab(libraryTab, !history);
+        styleSectionTab(historyTab, history);
+        searchField.setDisable(history);
+        searchField.setVisible(!history);
+        searchField.setManaged(!history);
+        pageLabel.setVisible(!history);
+        pageLabel.setManaged(!history);
+        prevButton.setVisible(!history);
+        prevButton.setManaged(!history);
+        nextButton.setVisible(!history);
+        nextButton.setManaged(!history);
+
+        if (history) {
+            showHistory();
+        } else {
+            page = 1;
+            fetch();
+        }
+    }
+
+    /// 分区按钮的选中态：选中的用主题色描边，未选中的透明。
+    private void styleSectionTab(JFXButton button, boolean selected) {
+        button.setStyle(selected
+                ? "-fx-background-color: -monet-primary; -fx-text-fill: -monet-on-primary;"
+                + " -fx-background-radius: 16; -fx-padding: 4 14 4 14; -fx-font-size: 12px; -fx-cursor: hand;"
+                : "-fx-background-color: -monet-surface-container-high; -fx-text-fill: -monet-on-surface-variant;"
+                + " -fx-background-radius: 16; -fx-padding: 4 14 4 14; -fx-font-size: 12px; -fx-cursor: hand;");
+    }
+
+    /// 显示曾使用过的皮肤/披风。全部从本地材质文件读，不需要网络。
+    private void showHistory() {
+        String kind = filter == Filter.SKIN ? "skin" : "cape";
+        List<SkinHistory.Entry> records = SkinHistory.get().entries(kind);
+        List<Item> items = new java.util.ArrayList<>(records.size());
+        for (SkinHistory.Entry record : records)
+            items.add(Item.fromHistory(record));
+
+        historyCountLabel.setText(items.isEmpty() ? "" : String.valueOf(items.size()));
+
+        loading = false;
+        hasNext = false;
+        hasPrev = false;
+        pageLabel.setText("曾使用过");
+        applyButton.setDisable(items.isEmpty());
+        listView.setItems(FXCollections.observableArrayList(items));
+
+        if (items.isEmpty()) {
+            String empty = filter == Filter.SKIN
+                    ? "还没有用过任何皮肤。\n在“皮肤库”里挑一个应用后，它会出现在这里。"
+                    : "还没有用过任何披风。\n在“皮肤库”里挑一个应用后，它会出现在这里。";
+            listView.setPlaceholder(placeholderLabel(empty));
+            statusLabel.setText("");
+        } else {
+            listView.setPlaceholder(placeholderLabel("没有找到皮肤"));
+            statusLabel.setText("最近使用的在最上面，点击即可再次应用");
+            loadLocalTextures(items);
+        }
+    }
+
+    /// 历史条目的缩略图直接从本地文件读，不走网络。
+    private void loadLocalTextures(List<Item> items) {
+        for (Item item : items) {
+            if (item.path == null || textureCache.containsKey(keyOf(item)))
+                continue;
+            try {
+                textureCache.put(keyOf(item), new Image(Path.of(item.path).toUri().toString(), true));
+            } catch (Throwable ignored) {
+                // 单张缩略图读不出来不影响列表
+            }
+        }
+        listView.refresh();
+    }
+
+    /// 本地历史条目没有 tid，用路径的哈希取一个负数键，避免和皮肤库的 tid 撞车。
+    private static int hashOf(String path) {
+        return path == null ? 0 : Math.abs(path.hashCode() % 100000) + 1;
+    }
+
+    /// “刚刚 / 3 小时前 / 2 天前”这样的相对时间，比绝对时间戳好读。
+    static String describeAge(long usedAt) {
+        long delta = System.currentTimeMillis() - usedAt;
+        if (delta < 0)
+            return "刚刚";
+        long minutes = delta / 60000;
+        if (minutes < 1)
+            return "刚刚";
+        if (minutes < 60)
+            return minutes + " 分钟前";
+        long hours = minutes / 60;
+        if (hours < 24)
+            return hours + " 小时前";
+        long days = hours / 24;
+        if (days < 30)
+            return days + " 天前";
+        long months = days / 30;
+        if (months < 12)
+            return months + " 个月前";
+        return (months / 12) + " 年前";
     }
 
     /// Creates one toggle of the 形态 switch: `secondForm` 标记该按钮代表的形态
@@ -393,7 +548,7 @@ public final class LittleSkinLibraryPane extends StackPane {
         }
 
         resolveTexture(item, () -> {
-            Image texture = textureCache.get(item.tid);
+            Image texture = textureCache.get(keyOf(item));
             if (texture == null || texture.isError() || texture.getProgress() < 1.0)
                 return;
             if (filter == Filter.SKIN) {
@@ -634,9 +789,38 @@ public final class LittleSkinLibraryPane extends StackPane {
         }, "littleskin-thumbs", true);
     }
 
+    /// 列表项对应的缓存键：历史条目没有 tid，用路径哈希的负数键区分。
+    private static int keyOf(Item item) {
+        return item.tid > 0 ? item.tid : -hashOf(item.path);
+    }
+
     /// Starts the background loading of one texture image; re-renders the list and
     /// invokes `onReady` (on the FX thread) when the image is available.
     private void startTextureLoad(Item item, Runnable onReady) {
+        // 历史条目：材质已经在本地，直接读文件，不查 hash、不下载。
+        if (item.path != null) {
+            int key = keyOf(item);
+            Image cached = textureCache.get(key);
+            if (cached != null) {
+                if (onReady != null)
+                    whenImageReady(cached, onReady);
+                return;
+            }
+            try {
+                Image image = new Image(Path.of(item.path).toUri().toString(), true);
+                textureCache.put(key, image);
+                image.progressProperty().addListener((obs, ov, nv) -> {
+                    if (nv.doubleValue() >= 1.0) {
+                        listView.refresh();
+                        if (onReady != null)
+                            onReady.run();
+                    }
+                });
+            } catch (Throwable ignored) {
+            }
+            return;
+        }
+
         if (item.hash == null)
             return;
         Image cached = textureCache.get(item.tid);
@@ -658,6 +842,10 @@ public final class LittleSkinLibraryPane extends StackPane {
 
     /// Ensures the texture hash of the item is known, then starts the image load.
     private void resolveTexture(Item item, Runnable onReady) {
+        if (item.path != null) {
+            startTextureLoad(item, onReady);
+            return;
+        }
         if (item.hash != null && item.hash.length() == 64) {
             startTextureLoad(item, onReady);
             return;
@@ -693,6 +881,20 @@ public final class LittleSkinLibraryPane extends StackPane {
     }
 
     private void downloadAndPick(Item item) {
+        // 历史条目：文件已经在本地，直接交给上层应用，不用再下载一次。
+        if (item.path != null) {
+            Path file = Path.of(item.path);
+            if (!Files.isRegularFile(file)) {
+                statusLabel.setText("这件材质已不在本地，请从皮肤库重新选择");
+                return;
+            }
+            // 再次使用同一条：把它提到历史最前。
+            recordHistory(item, file);
+            fireEvent(new DialogCloseEvent());
+            onPicked.accept(file);
+            return;
+        }
+
         statusLabel.setText("正在下载材质…");
         applyButton.setDisable(true);
         Path target = cacheDir.resolve("skinlib-" + item.tid + ".png");
@@ -709,6 +911,7 @@ public final class LittleSkinLibraryPane extends StackPane {
                 }
                 Files.createDirectories(cacheDir);
                 new FileDownloadTask(TEXTURES_BASE + hash, target).run();
+                recordHistory(item, target);
                 Platform.runLater(() -> {
                     statusLabel.setText("");
                     applyButton.setDisable(false);
@@ -722,6 +925,30 @@ public final class LittleSkinLibraryPane extends StackPane {
                 });
             }
         }, "littleskin-download", true);
+    }
+
+    /// 把这次应用记进“曾使用过”。
+    ///
+    /// <p>时机是材质落到本地之后、交给上层之前：应用本身可能失败（比如皮肤站拒绝），
+    /// 但那时用户已经把这一件挑出来了，记下来才符合“曾使用过”的字面意思，
+    /// 也方便他失败后直接从历史里重试，不用再翻一遍皮肤库。</p>
+    private void recordHistory(Item item, Path file) {
+        SkinHistory.Entry entry = new SkinHistory.Entry();
+        entry.kind = filter == Filter.SKIN ? "skin" : "cape";
+        entry.tid = item.tid;
+        entry.name = item.name;
+        entry.author = item.nickname;
+        entry.type = item.type;
+        entry.hd = item.hd;
+        entry.path = file.toString();
+        SkinHistory.get().record(entry);
+        refreshHistoryCount();
+    }
+
+    /// 分区按钮上的条数，应用之后要跟着变。
+    private void refreshHistoryCount() {
+        int count = SkinHistory.get().count(filter == Filter.SKIN ? "skin" : "cape");
+        historyCountLabel.setText(count == 0 ? "" : String.valueOf(count));
     }
 
     /// List cell with a texture thumbnail and two-line text; the selected cell is
@@ -761,10 +988,16 @@ public final class LittleSkinLibraryPane extends StackPane {
                 case "cape": model = "披风"; break;
                 default: model = String.valueOf(item.type);
             }
-            subtitleLabel.setText(model
-                    + (item.nickname != null ? " · by " + item.nickname : ""));
+            if (item.path != null) {
+                // 历史条目：说明来源与上次使用时间，比作者名有用。
+                subtitleLabel.setText("曾使用过" + (item.nickname != null ? " · " + item.nickname : "")
+                        + (item.usedAt > 0 ? " · " + describeAge(item.usedAt) : ""));
+            } else {
+                subtitleLabel.setText(model
+                        + (item.nickname != null ? " · by " + item.nickname : ""));
+            }
 
-            Image image = textureCache.get(item.tid);
+            Image image = textureCache.get(keyOf(item));
             drawThumbnail(thumbnail, image, item.type);
             setGraphic(box);
             setStyle(isSelected() ? SELECTED_STYLE : UNSELECTED_STYLE);

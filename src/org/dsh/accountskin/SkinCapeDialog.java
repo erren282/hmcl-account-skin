@@ -130,10 +130,23 @@ public final class SkinCapeDialog extends StackPane {
         Path file = org.jackhuang.hmcl.util.io.FileUtils.toPath(chooser.showOpenDialog(Controllers.getStage()));
         if (file == null)
             return;
+        // 自己挑的本地文件同样记进“曾使用过”，下次不用再翻文件管理器。
+        recordLocalFile(file, isSkin);
         if (isSkin)
             SkinApplier.applySkin(account, file, this::closeAndRefresh, SkinCapeDialog::showError);
         else
             SkinApplier.applyCape(account, file, this::closeAndRefresh, SkinCapeDialog::showError);
+    }
+
+    /// 把用户手动挑选的本地图片记进历史。名字取文件名，便于在列表里认出来。
+    private static void recordLocalFile(Path file, boolean isSkin) {
+        SkinHistory.Entry entry = new SkinHistory.Entry();
+        entry.kind = isSkin ? "skin" : "cape";
+        entry.tid = 0;
+        entry.name = org.jackhuang.hmcl.util.io.FileUtils.getName(file);
+        entry.type = isSkin ? "steve" : "cape";
+        entry.path = file.toString();
+        SkinHistory.get().record(entry);
     }
 
     private void closeAndRefresh() {

@@ -35,6 +35,9 @@ public class AccountSkinPlugin extends HmclPlugin {
 
     @Override
     public void onEnable() {
+        // 历史记录落在插件自己的数据目录里，重启后还在。
+        SkinHistory.initialize(getContext().getDataFile("history.json"));
+
         skinAction = new PluginAccountAction() {
             @Override
             public String getName() {
