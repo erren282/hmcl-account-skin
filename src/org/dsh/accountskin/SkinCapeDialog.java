@@ -64,6 +64,14 @@ public final class SkinCapeDialog extends StackPane {
             "-fx-background-color: -monet-surface-container-high; -fx-text-fill: -monet-on-surface-variant;"
                     + " -fx-background-radius: 16; -fx-padding: 4 14 4 14; -fx-font-size: 12px; -fx-cursor: hand;";
 
+    /// 历史行选中态：主题色圆角边框 + 同色浅底，与皮肤库列表保持一致。
+    private static final String ROW_SELECTED =
+            "-fx-border-color: -monet-primary; -fx-border-width: 2; -fx-border-radius: 8;"
+                    + " -fx-background-radius: 8; -fx-background-color: derive(-monet-primary, 90%); -fx-padding: 4;";
+    private static final String ROW_UNSELECTED =
+            "-fx-border-color: transparent; -fx-border-width: 2; -fx-border-radius: 8;"
+                    + " -fx-background-radius: 8; -fx-padding: 4;";
+
     private final Account account;
     private final Mode mode;
     private final Path dataDir;
@@ -499,6 +507,15 @@ public final class SkinCapeDialog extends StackPane {
             box.setAlignment(Pos.CENTER_LEFT);
             setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
             setPrefHeight(50);
+
+            // 选中态必须跟着 selection 走，而不是在 updateItem 里读一次 isSelected()：
+            // 点击只会改变选中状态、不会重建单元格，那样边框要等滚动一下才出现。
+            selectedProperty().addListener((obs, wasSelected, isSelected) ->
+                    applySelectionStyle(isSelected));
+        }
+
+        private void applySelectionStyle(boolean selected) {
+            setStyle(selected ? ROW_SELECTED : ROW_UNSELECTED);
         }
 
         @Override
@@ -506,7 +523,7 @@ public final class SkinCapeDialog extends StackPane {
             super.updateItem(row, empty);
             if (empty || row == null) {
                 setGraphic(null);
-                setStyle("");
+                applySelectionStyle(false);
                 return;
             }
             SkinHistory.Entry entry = row.entry;
@@ -524,6 +541,7 @@ public final class SkinCapeDialog extends StackPane {
             subtitleLabel.setText(detail.toString());
 
             setGraphic(box);
+            applySelectionStyle(isSelected());
         }
     }
 
